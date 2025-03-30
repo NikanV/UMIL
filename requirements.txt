@@ -1,3 +1,4 @@
+safetensors==0.4.5
 mmcv-full
 decord
 ftfy
@@ -8,3 +9,4 @@ regex
 yacs
 scikit-learn
 matplotlib
+pandas
