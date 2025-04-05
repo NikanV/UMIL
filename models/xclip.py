@@ -244,7 +244,7 @@ def load(model_path, name: str, device: Union[str, torch.device] = "cuda" if tor
 ):
     if model_path is None:
         model_path = clip._download(clip._MODELS[name])
-
+        print(f"Model saved to: {model_path}")
     try:
         # loading JIT archive
         model = torch.jit.load(model_path, map_location=device if jit else "cpu").eval()
@@ -266,4 +266,4 @@ def load(model_path, name: str, device: Union[str, torch.device] = "cuda" if tor
                         )
     if str(device) == "cpu":
         model.float()
-    return model, model.state_dict()
+    return model, model.state_dict(), model_path

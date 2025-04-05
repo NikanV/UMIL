@@ -54,7 +54,7 @@ def parse_option():
 
 def main(config):
     train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train,_ = build_dataloader(logger, config)
-    model, _ = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
+    model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                          device="cpu", jit=False, 
                          T=config.DATA.NUM_FRAMES,
                          droppath=config.MODEL.DROP_PATH_RATE, 
@@ -90,7 +90,7 @@ def main(config):
     text_labels = generate_text(train_data)
     
     if config.TEST.ONLY_TEST:
-        if not os.path.isdir(config.MODEL.PRETRAINED):
+        if not os.path.isdir(model_path):
             #evaluate on val set
             out_path = config.MODEL.PRETRAINED.replace('pth','pkl')
             if os.path.exists(out_path):
