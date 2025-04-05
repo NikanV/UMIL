@@ -114,7 +114,7 @@ def main(config):
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
             # evaluate on val set
-            out_path = model_path.replace('pth','pkl')
+            out_path = model_path.replace('pt','pkl')
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
