@@ -9,8 +9,7 @@ import shutil
 from pathlib import Path
 from utils.config import get_config
 from utils.optimizer import build_optimizer, build_scheduler
-from utils.tools import AverageMeter, reduce_tensor, epoch_saving, load_checkpoint, generate_text, auto_resume_helper, evaluate_result
-from utils.cluster import ClusterLoss, Normalize, BCE, NCLMemory, PairEnum
+from utils.tools import AverageMeter, epoch_saving, load_checkpoint, generate_text, auto_resume_helper, evaluate_result
 from datasets.build import build_dataloader
 from utils.logger import create_logger
 import time
@@ -18,8 +17,6 @@ import numpy as np
 import random
 import mmcv
 from apex import amp
-from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
-from datasets.blending import CutmixMixupBlending
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
