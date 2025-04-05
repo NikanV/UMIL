@@ -1,5 +1,5 @@
 DATA:
-    ROOT: '/kaggle/input/TAD/TAD/frames/'
+    ROOT: '/kaggle/input/traffic-anomaly-dataset/TAD/TAD/frames'
     TRAIN_FILE: 'labels/TAD_train.txt'
     VAL_FILE: 'labels/TAD_test.txt'
     DATASET: traffic
