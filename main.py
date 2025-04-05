@@ -63,7 +63,7 @@ def main(config):
                          logger=logger,
                         )
     model = model.cuda()
-
+    logger.info(f"Model saved to {model_path}")
 
     optimizer, _ = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
@@ -92,7 +92,7 @@ def main(config):
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
             #evaluate on val set
-            out_path = config.MODEL.PRETRAINED.replace('pth','pkl')
+            out_path = model_path.replace('pth','pkl')
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
@@ -114,7 +114,7 @@ def main(config):
             return
         else:
             for epoch in range(config.TRAIN.EPOCHS):
-                out_path = os.path.join(config.MODEL.PRETRAINED, 'ckpt_epoch_' + str(epoch) + '.pkl')
+                out_path = os.path.join(model_path, 'ckpt_epoch_' + str(epoch) + '.pkl')
                 scores_dict = validate(test_loader, text_labels, model, config, out_path)
                 tmp_dict = {}
                 for v_name in scores_dict["cls"].keys():

@@ -79,7 +79,8 @@ def main(config):
                          logger=logger,
                         )
     model = model.cuda()
-
+    logger.info(f"Model saved to {model_path}")
+    
     criterion = ClusterLoss(config.DATA.NUM_CLASSES, args.bce_type,
         args.cosine_threshold, args.topk
     )
@@ -113,7 +114,7 @@ def main(config):
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
             # evaluate on val set
-            out_path = config.MODEL.PRETRAINED.replace('pth','pkl')
+            out_path = model_path.replace('pth','pkl')
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
