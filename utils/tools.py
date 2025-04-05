@@ -72,7 +72,7 @@ def evaluate_result(vid2abnormality, anno_file, root=''):
     fpr, tpr, threshold = roc_curve(GT, ANS)
 
     if root != '':
-        output_file = path + "AUC.npz"
+        output_file = root + "AUC.npz"
         np.savez(output_file, fpr=fpr, tpr=tpr, thre=threshold)
 
     return Ret, ret
