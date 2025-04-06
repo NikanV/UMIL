@@ -114,7 +114,10 @@ def main(config):
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
             # evaluate on val set
-            out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').split('/')[-1])
+            if "kaggle" in model_path:
+                out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
+            else:
+                out_path = model_path.replace('pth','pkl').replace('pt','pkl')
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
