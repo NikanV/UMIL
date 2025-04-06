@@ -1,5 +1,5 @@
 DATA:
-    ROOT: '/home/mnafez/UMIL/TAD/'
+    ROOT: '/home/user01/nikan/UMIL/TAD/'
     TRAIN_FILE: 'labels/TAD_train.txt'
     VAL_FILE: 'labels/TAD_test.txt'
     DATASET: traffic
