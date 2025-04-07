@@ -67,7 +67,7 @@ def main(config):
     if config.TRAIN.OPT_LEVEL != 'O0':
         model, optimizer = amp.initialize(models=model, optimizers=optimizer, opt_level=config.TRAIN.OPT_LEVEL)
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=False)
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=False)
 
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
 
@@ -82,14 +82,18 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        start_epoch, max_accuracy = load_checkpoint(config, model.module, optimizer, lr_scheduler, logger)
+        start_epoch, max_accuracy = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
 
     text_labels = generate_text(train_data)
+    is_best = None
     
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
             #evaluate on val set
-            out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').split('/')[-1])
+            if "kaggle" in model_path:
+                out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
+            else:
+                out_path = model_path.replace('pth','pkl').replace('pt','pkl')
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
@@ -129,7 +133,7 @@ def main(config):
         train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config)
 
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            epoch_saving(config, epoch, model.module, max_auc, optimizer, lr_scheduler,_,_, logger, config.OUTPUT, is_best)
+            epoch_saving(config, epoch, model, max_auc, optimizer, lr_scheduler,_,_, logger, config.OUTPUT, is_best)
 
 def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict=None):
     model.train()

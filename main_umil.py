@@ -92,7 +92,7 @@ def main(config):
     if config.TRAIN.OPT_LEVEL != 'O0':
         model, [optimizer, optimizer_umil] = amp.initialize(models=model, optimizers=[optimizer, optimizer_umil], opt_level=config.TRAIN.OPT_LEVEL)
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=False)
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
 
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
 
@@ -107,7 +107,7 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        start_epoch, _ = load_checkpoint(config, model.module, optimizer, lr_scheduler, logger)
+        start_epoch, _ = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
 
     text_labels = generate_text(train_data)
     
@@ -233,7 +233,7 @@ def main(config):
         logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
 
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            epoch_saving(config, epoch, model.module, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
+            epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
 
         if epoch >= args.umil_epoch:
             train_loader_umil.sampler.set_epoch(epoch)
@@ -260,7 +260,7 @@ def main(config):
             logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
 
             if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)) and auc_all_u>auc_all:
-                epoch_saving(config, epoch, model.module, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
+                epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
 
 def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list):
     model.train()
@@ -629,7 +629,7 @@ def validate(data_loader, text_labels, model, config, out_path):
             b, n, c, t, h, w = _image.size()
             _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
 
-            output = model(_image, text_inputs)
+            output = model(_image.cuda(), text_inputs)
 
             scores_prd = F.softmax(output['y'], dim=-1)
             scores_cls = F.softmax(output['y_cluster_all'], dim=-1)
