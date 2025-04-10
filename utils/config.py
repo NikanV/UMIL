@@ -45,7 +45,7 @@ _C.TRAIN.BATCH_SIZE_UMIL = 4
 _C.TRAIN.ACCUMULATION_STEPS = 1
 _C.TRAIN.LR_SCHEDULER = 'cosine'
 _C.TRAIN.OPTIMIZER = 'adamw'
-_C.TRAIN.OPT_LEVEL = 'O1'
+_C.TRAIN.OPT_LEVEL = 'O0'
 _C.TRAIN.AUTO_RESUME = False
 _C.TRAIN.USE_CHECKPOINT = False
 
@@ -73,7 +73,7 @@ _C.TEST.ONLY_TEST = False
 # -----------------------------------------------------------------------------
 _C.OUTPUT = ''
 _C.SAVE_FREQ = 1
-_C.PRINT_FREQ = 20
+_C.PRINT_FREQ = 10
 _C.SEED = 1024
 
 
