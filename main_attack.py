@@ -44,7 +44,7 @@ def parse_option():
     parser.add_argument('--w-smooth', default=0.01, type=float, help='weight of smooth loss')
     parser.add_argument('--w-sparse', default=0.001, type=float, help='weight of sparse loss')
     # attack parameters
-    parser.add_argument('--eps', default=4/255, type=float, help='epsilon')
+    parser.add_argument('--eps', default=8/255, type=float, help='epsilon')
 
     args = parser.parse_args()
 

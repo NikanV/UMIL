@@ -448,7 +448,6 @@ def build_dataloader(logger, config):
         dict(type='ToTensor', keys=['imgs', 'label']),
     ]
         
-
     train_data = FrameDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
                               filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
                               pipeline=train_pipeline, pipeline_=train_pipeline_S)
