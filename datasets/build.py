@@ -275,6 +275,7 @@ class FrameDataset(BaseDataset):
                 vid += 1
         return video_infos
 
+
 class FrameDatasetV2(BaseDataset):
     def __init__(self, ann_file, pipeline, labels_file, start_index=0, **kwargs):
         super().__init__(ann_file, pipeline, start_index=start_index, **kwargs)
@@ -516,6 +517,21 @@ def build_dataloader(logger, config):
     test_data = RawFramesTestDataset(ann_file=config.DATA.VAL_FILE, data_prefix=config.DATA.ROOT,
                             labels_file=config.DATA.LABEL_LIST, filename_tmpl=config.DATA.FILENAME_TMPL,
                             pipeline=test_pipeline, seg_interval=config.DATA.NUM_FRAMES*config.DATA.FRAME_INTERVAL)
+
+    # test_pipeline = [
+    #     dict(type='SampleFrames', clip_len=config.DATA.NUM_FRAMES, frame_interval=config.DATA.FRAME_INTERVAL,
+    #          num_clips=16, test_mode=True),
+    #     dict(type='RawFrameDecode'),
+    #     dict(type='Resize', scale=(-1, scale_resize)),
+    #     dict(type='CenterCrop', crop_size=config.DATA.INPUT_SIZE),
+    #     dict(type='Normalize', **img_norm_cfg),
+    #     dict(type='FormatShape', input_format='NCTHW'),
+    #     dict(type='Collect', keys=['imgs', 'label', 'vid'], meta_keys=[]),
+    #     dict(type='ToTensor', keys=['imgs'])
+    # ]
+    # test_data = FrameDataset(ann_file=config.DATA.VAL_FILE, data_prefix=config.DATA.ROOT,
+    #                           filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
+    #                           pipeline=test_pipeline)
 
     sampler_test = torch.utils.data.SequentialSampler(test_data)
     test_loader = DataLoader(

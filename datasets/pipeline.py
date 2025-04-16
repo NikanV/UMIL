@@ -2105,19 +2105,19 @@ class RawFrameDecode:
 
         offset = results.get('offset', 0)
         # import pdb;pdb.set_trace()
-        all_files = sorted(
-            [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))],
-            key=lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else x
-        )
+        # all_files = sorted(
+        #     [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))],
+        #     key=lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else x
+        # )
         for frame_idx in results['frame_inds']:
             frame_idx += offset
             if modality == 'RGB':
                 if 'start_index' in results:
-                    # filepath = osp.join(directory, filename_tmpl.format(frame_idx+results['start']))
-                    filepath = os.path.join(directory, all_files[frame_idx + results['start_index']])
+                    filepath = osp.join(directory, filename_tmpl.format(frame_idx+results['start_index']))
+                    # filepath = os.path.join(directory, all_files[frame_idx + results['start_index']])
                 else:
-                    # filepath = osp.join(directory, filename_tmpl.format(frame_idx))
-                    filepath = os.path.join(directory, all_files[frame_idx])
+                    filepath = osp.join(directory, filename_tmpl.format(frame_idx))
+                    # filepath = os.path.join(directory, all_files[frame_idx])
                 # print(results['frame_inds'],filepath)
                 img_bytes = self.file_client.get(filepath)
                 # Get frame with channel order RGB directly.
