@@ -63,13 +63,18 @@ def evaluate_result(vid2abnormality, anno_file, root=''):
         if cur_gt.max() >=1:
             gt.extend(cur_gt.tolist())
             ans.extend(cur_ans.tolist())
-
         GT.extend(cur_gt.tolist())
         ANS.extend(cur_ans.tolist())
-
+    
+    # GT_tmp = np.array(GT)
+    # ANS_tmp = np.array(ANS)
+    # valid_mask = ~np.isnan(GT_tmp) & ~np.isnan(ANS_tmp) & ~np.isinf(GT_tmp) & ~np.isinf(ANS_tmp)
+    
     ret = roc_auc_score(gt, ans)
     Ret = roc_auc_score(GT, ANS)
+    # Ret = roc_auc_score(GT_tmp[valid_mask], ANS_tmp[valid_mask])
     fpr, tpr, threshold = roc_curve(GT, ANS)
+    # fpr, tpr, threshold = roc_curve(GT_tmp[valid_mask], ANS_tmp[valid_mask])
 
     if root != '':
         output_file = os.path.join(root, "AUC.npz")

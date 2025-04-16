@@ -554,22 +554,19 @@ def build_dataloader(logger, config):
         dict(type='Collect', keys=['imgs', 'label', 'vid'], meta_keys=[]),
         dict(type='ToTensor', keys=['imgs'])
     ]
+    train_data_test = RawFramesTestDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
+                                     labels_file=config.DATA.LABEL_LIST, filename_tmpl=config.DATA.FILENAME_TMPL,
+                                     pipeline=train_pipeline_test,
+                                     seg_interval=config.DATA.NUM_FRAMES * config.DATA.FRAME_INTERVAL)
 
-    # train_data_test = FrameDatasetV2(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
-    #                           filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-    #                           pipeline=train_pipeline, pipeline_=train_pipeline_S)
+    train_sampler_test = torch.utils.data.SequentialSampler(train_data_test)
+    train_loader_test = DataLoader(
+        train_data_test, sampler=train_sampler_test,
+        batch_size=1,
+        num_workers=16,
+        pin_memory=True,
+        drop_last=False,
+        collate_fn=partial(mmcv_collate, samples_per_gpu=2),
+    )
 
-    # train_sampler_test = torch.utils.data.DistributedSampler(
-    #     train_data, num_replicas=num_tasks, rank=global_rank, shuffle=True
-    # )
-    
-    # train_loader_test = DataLoader(
-    #     train_data_test, sampler=train_sampler_test,
-    #     batch_size=config.TRAIN.BATCH_SIZE,
-    #     num_workers=12,
-    #     pin_memory=True,
-    #     drop_last=True,
-    #     collate_fn=partial(mmcv_collate, samples_per_gpu=config.TRAIN.BATCH_SIZE),
-    # )
-
-    return train_data, val_data, test_data, train_loader, val_loader, test_loader, None, train_loader_umil
+    return train_data, val_data, test_data, train_loader, val_loader, test_loader, train_loader_test, train_loader_umil
