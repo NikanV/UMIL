@@ -296,7 +296,18 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
         if texts.shape[0] == 1:
             texts = texts.view(1, -1)
 
-        output = model(images, texts)
+        outputs = {}
+        for i in range(images.shape[0]):
+            img = images[i].unsqueeze(0)
+            out = model(img, texts)
+            for key in out:
+                if key not in outputs:
+                    outputs[key] = []
+                outputs[key].append(out[key])
+            
+        # output = model(images, texts)
+        output = {key: torch.cat(outputs[key], dim=0) for key in outputs}
+        
         # mil loss on max scores among bags, view instance of max scores as labeled data
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug, )
         scores = F.softmax(logits, dim=-1)
