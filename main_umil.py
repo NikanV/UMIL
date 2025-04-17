@@ -303,6 +303,8 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
             logger.info(f"Image shape after: {img.shape}")
             out = model(img, texts)
             for key in out:
+                logger.info(f"{key}, Out: {out[key].shape}")
+            for key in out:
                 if key not in outputs:
                     outputs[key] = []
                 outputs[key].append(out[key])
