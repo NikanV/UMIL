@@ -297,8 +297,10 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
             texts = texts.view(1, -1)
 
         outputs = {}
+        logger.info(f"Image shape before: {images.shape}")
         for i in range(images.shape[0]):
             img = images[i].unsqueeze(0)
+            logger.info(f"Image shape after: {img.shape}")
             out = model(img, texts)
             for key in out:
                 if key not in outputs:
