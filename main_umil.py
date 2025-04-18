@@ -638,6 +638,7 @@ def validate(data_loader, text_labels, model, config, out_path):
         text_inputs = text_labels.cuda()
         logger.info(f"{config.TEST.NUM_CLIP * config.TEST.NUM_CROP} views inference")
         for idx, batch_data in enumerate(data_loader):
+            print(f"{idx}, {batch_data}\n\n")
             _image = batch_data["imgs"]
             label_id = batch_data["label"]
             label_id = label_id.reshape(-1)
