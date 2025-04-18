@@ -41,6 +41,7 @@ def evaluate_result(vid2abnormality, anno_file, root=''):
         videos[vid] = sub_video_gt
 
     for vid in videos:
+        print(f"Vid {vid}, Keys: {vid2abnormality.keys()}")
         if vid not in vid2abnormality.keys():
             print("The video %s is excluded on the result!" % vid)
             continue
