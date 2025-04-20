@@ -71,7 +71,7 @@ def main(config):
 
     train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
-                         device="cpu", jit=True, 
+                         device="cpu", jit=False, 
                          T=config.DATA.NUM_FRAMES,
                          droppath=config.MODEL.DROP_PATH_RATE, 
                          use_checkpoint=config.TRAIN.USE_CHECKPOINT, 
