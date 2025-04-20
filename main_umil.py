@@ -43,7 +43,7 @@ def parse_option():
     parser.add_argument('--umil-epoch', default=30, type=float)
     parser.add_argument('--threshold', default=0.8, type=float)
     parser.add_argument('--cluster-threshold', default=0.8, type=float)
-    parser.add_argument("--local_rank", type=int, default=-1, help='local rank for DistributedDataParallel')
+    parser.add_argument("--local-rank", type=int, default=-1, help='local rank for DistributedDataParallel')
     parser.add_argument("--bce-type", type=str, default='cos', help="Type of clustering techniques: cos or RK")
     parser.add_argument('--cosine-threshold', default=0.7, type=float, help='cosine similarity threshold for clustering')
     parser.add_argument('--topk', default=2, type=int, help='rank statistics threshold for clustering')

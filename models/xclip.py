@@ -253,7 +253,7 @@ def load(model_path, name: str, device: Union[str, torch.device] = "cuda" if tor
         if jit:
             warnings.warn(f"File {model_path} is not a JIT archive. Loading as a state dict instead")
             jit = False
-        state_dict = torch.load(model_path, map_location="cpu")
+        state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
     
     state = state_dict['model'] if (state_dict is not None and state_dict['model'] is not None) else model.state_dict()
     model = build_model(state, T=T, droppath=droppath,
