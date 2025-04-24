@@ -22,6 +22,21 @@ from utils.config import get_config
 from models import xclip
 from einops import rearrange
 import torch.nn.functional as F
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+import pandas as pd
+import json
+from prettytable import PrettyTable
+
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
 
 def parse_option():
     parser = argparse.ArgumentParser()
@@ -60,15 +75,16 @@ def parse_option():
     parser.add_argument('--w-ce', default=0.0, type=float, help='weight of ce loss')
 
     parser.add_argument('--w-cls', default=0, type=float, help='weight of cluster anomaly score')
+    # attack parameters
+    parser.add_argument('--eps', default=2/255, type=float, help='epsilon')
+    
     args = parser.parse_args()
 
     config = get_config(args)
 
     return args, config
 
-
-def main(config):
-
+def main(config, eps):
     train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                          device="cpu", jit=False, 
@@ -88,58 +104,23 @@ def main(config):
     optimizer, optimizer_umil = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
     lr_scheduler_umil = build_scheduler(config, optimizer_umil, len(train_loader_umil))
-
-    if config.TRAIN.OPT_LEVEL != 'O0':
-        model, [optimizer, optimizer_umil] = amp.initialize(models=model, optimizers=[optimizer, optimizer_umil], opt_level=config.TRAIN.OPT_LEVEL)
-
-    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
-
-    start_epoch, best_epoch, max_auc = 0, 0, 0.0
-
-    if config.TRAIN.AUTO_RESUME:
-        resume_file = auto_resume_helper(config.OUTPUT)
-        if resume_file:
-            config.defrost()
-            config.MODEL.RESUME = resume_file
-            config.freeze()
-            logger.info(f'auto resuming from {resume_file}')
-        else:
-            logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
-
-    if config.MODEL.RESUME:
-        start_epoch, _ = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
-
+    
     text_labels = generate_text(train_data)
     
     if config.TEST.ONLY_TEST:
-        if not os.path.isdir(model_path):
-            # evaluate on val set
-            if "kaggle" in model_path:
-                out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
-            else:
-                out_path = model_path.replace('pth','pkl').replace('pt','pkl')
-            if os.path.exists(out_path):
-                scores_dict = mmcv.load(out_path)
-            else:
-                scores_dict = validate(test_loader, text_labels, model, config, out_path)
-
-            tmp_dict = {}
-            for v_name in scores_dict["cls"].keys():
-                p_scores = np.array(scores_dict["prd"][v_name]).copy()
-                c_scores = np.array(scores_dict["cls"][v_name]).copy()
-
-                if p_scores.shape[0] == 1:
-                    # 1,32,2
-                    tmp_dict[v_name] = [p_scores[0, :, 1] + args.w_cls * c_scores[0, :, 1]]
-                else:
-                    # T,1,2
-                    tmp_dict[v_name] = [p_scores[:, 0, 1] + args.w_cls * c_scores[:, 0, 1]]
-
-            auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE, os.path.dirname(out_path))
-
-            logger.info(f"AUC@all/ano of version {out_path.split('/')[-2]} on epoch {out_path.split('/')[-1].split('_')[-1][:-4]} : {auc_all:.4f}({auc_ano:.4f})")
-            return
-
+        model.eval()
+        scores_dict = gen_labels(val_loader_train, text_labels, model, config)
+        return
+    
+    gt = None
+    with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
+        # gt = json.load(json_data)
+        gt = mmcv.load(json_data, file_format='json')
+        json_data.close()
+    vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
+    
+    start_epoch, best_epoch, max_auc = 0, 0, 0.0
+    
     data_dict = {}
     data_dict['mask'] = {}
     data_dict['label'] = {}
@@ -154,10 +135,13 @@ def main(config):
             line_split = line.strip().split()
             filename = line_split[0].split('/')[-1]
             vid_list.append(filename)
-
+    
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_()
+    
     for epoch in range(start_epoch, config.TRAIN.EPOCHS):
         train_loader.sampler.set_epoch(epoch)
-        mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list)
+        mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, vid2key, eps)
 
         # calculate training statics
         if epoch % 1 == 0 and epoch >= (args.umil_epoch-5):
@@ -238,7 +222,7 @@ def main(config):
         if epoch >= args.umil_epoch:
             train_loader_umil.sampler.set_epoch(epoch)
             umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, train_loader_umil, text_labels, config, data_dict,
-                          vid_list)
+                          vid_list, gt, vid2key, eps)
             #val
             out_path = os.path.join(config.OUTPUT, 'umil_epoch_' + str(epoch) + '.pkl')
             scores_dict = validate(val_loader, text_labels, model, config, out_path)
@@ -262,7 +246,7 @@ def main(config):
             if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)) and auc_all_u>auc_all:
                 epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
 
-def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list):
+def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, vid2key, eps):
     model.train()
 
     optimizer.zero_grad()
@@ -296,7 +280,10 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
         if texts.shape[0] == 1:
             texts = texts.view(1, -1)
 
-        output = model(images, texts)
+        original_images = images.clone().detach()
+        adv_images = get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps)
+
+        output = model(adv_images, texts)
         # mil loss on max scores among bags, view instance of max scores as labeled data
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug, )
         scores = F.softmax(logits, dim=-1)
@@ -461,9 +448,8 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
-
 def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, train_loader, text_labels, config, data_dict,
-                    vid_list):
+                    vid_list, gt, vid2key, eps):
     assert data_dict['length'] > 1
     model.train()
 
@@ -526,7 +512,10 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
             mask_target = ~mask_source
 
         if mask_target.sum() > 2:
-            output = model(images, texts)
+            original_images = images.clone().detach()
+            adv_images = get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps)
+            
+            output = model(adv_images, texts)
             bk_feat = rearrange(output['feature_v'], '(b a k) c -> b a k c', b=bz, a=a_aug, )
             cls_nograd = rearrange(output['y_cluster_all_nograd'], '(b a k) c -> b a k c', b=bz, a=a_aug, )
             inputs = {
@@ -573,7 +562,7 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
                 optimizer_umil.zero_grad()
                 lr_scheduler_umil.step_update(epoch * num_steps + idx)
         else:
-            optimize_umilr.step()
+            optimizer_umil.step()
             lr_scheduler_umil.step_update(epoch * num_steps + idx)
 
         torch.cuda.synchronize()
@@ -598,6 +587,89 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
+def get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps, num_attack_steps=10):
+    step_size = 2.5 * (eps / num_attack_steps)
+    
+    adv_images = original_images.clone().detach() # 16,5,3,224,224
+
+    for step in range(num_attack_steps):
+        adv_images.requires_grad_()
+        
+        output = model(adv_images, texts)
+        scores_prd = F.softmax(output['y'], dim=-1)
+        scores_cls = F.softmax(output['y_cluster_all'], dim=-1)
+        
+        scores_prd = rearrange(scores_prd, '(b a k) c -> (b a) k c', b=bz, a=a_aug)
+        scores_np_prd = scores_prd.cpu().data.numpy().copy()
+        scores_cls = rearrange(scores_cls, '(b a k) c -> (b a) k c', b=bz, a=a_aug)
+        scores_np_cls = scores_cls.cpu().data.numpy().copy()
+            
+        logits = scores_np_prd[:, :, 1] + args.w_cls * scores_np_cls[:, :, 1]
+        
+        logger.info(f"Size of scores: {scores_np_prd.shape}")
+        logger.info(f"Size of logits: {logits.shape}")
+        
+        # TODO: Needs to be checked!
+        
+        labels_binary = (label_id > 0).float().expand(logits.shape)
+        # labels_binary = torch.tensor(labels).cuda().float()
+        # logger.info(f"Size of labels: {labels_binary.shape}")
+
+        coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
+        cost = torch.dot(coef, logits)
+        
+        # logger.info(f"Size of coef: {coef.shape}, {coef}")
+        # logger.info(f"Size of cost: {cost.shape}, {cost}")
+        
+        cost.backward()
+
+        grad_sign = adv_images.grad.sign()
+        adv_images = adv_images.detach() + step_size * grad_sign
+        perturbation = torch.clamp(adv_images - original_images, min=-eps, max=eps)
+        adv_images = torch.clamp(original_images + perturbation, 0, 1)
+    return adv_images
+
+@torch.no_grad()
+def gen_labels(data_loader, text_labels, model, config):
+    model.eval()
+    vid_list = []
+
+    anno_file = config.DATA.TRAIN_FILE
+
+    with open(anno_file, 'r') as fin:
+        for line in fin:
+            line_split = line.strip().split()
+            filename = line_split[0].split('/')[-1]
+            vid_list.append(filename)
+
+    with torch.no_grad():
+        text_inputs = text_labels.cuda()
+        logger.info(f"{config.TEST.NUM_CLIP * config.TEST.NUM_CROP} views inference")
+        scores_dict = dict()
+        scores_dict['prd'] = dict()
+        for idx, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
+            _image = batch_data["imgs"].cuda()
+            label_id = batch_data["label"].cuda()
+            label_id = label_id.reshape(-1)
+            b, n, c, t, h, w = _image.size()
+            _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
+            output = model(_image, text_inputs)
+
+            scores_prd = F.softmax(output['y'], dim=-1)
+            scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)
+            scores_np_prd = scores_prd.cpu().data.numpy()
+
+            v_name = "01_Accident_001.mp4"
+            for ind in range(scores_np_prd.shape[0]):                    
+                v_name = vid_list[batch_data["vid"][ind]]
+                if v_name not in scores_dict['prd']:
+                    scores_dict['prd'][v_name] = []
+                scores_dict['prd'][v_name].append(np.argmax(scores_np_prd[ind]))
+
+    with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
+        json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=NpEncoder)
+
+    return scores_dict
 
 @torch.no_grad()
 def validate(data_loader, text_labels, model, config, out_path):
@@ -677,6 +749,42 @@ def validate(data_loader, text_labels, model, config, out_path):
 
     return scores_dict
 
+def get_gt(config):
+    GT = []
+    videos = {}
+    for video in open(config.DATA.VAL_FILE):
+        vid = video.strip().split(' ')[0].split('/')[-1]
+        video_len = int(video.strip().split(' ')[1])
+        sub_video_gt = np.zeros((video_len,), dtype=np.int8)
+        anomaly_tuple = video.split(' ')[3:]
+        for ind in range(len(anomaly_tuple) // 2):
+            start = int(anomaly_tuple[2 * ind])
+            end = int(anomaly_tuple[2 * ind + 1])
+            if start > 0:
+                sub_video_gt[start:end] = 1
+        videos[vid] = sub_video_gt
+        
+    return videos
+
+def save_image(image, name):
+    image = image.detach().cpu().clamp(0, 1)
+    image = image.permute(1, 2, 0).numpy()
+    path = os.path.join(config.OUTPUT, f"{name}.png")
+    plt.imsave(path, image)
+    logger.info(f"Saved image to {path}")
+
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        # if not parameter.requires_grad:
+        #     continue
+        params = parameter.numel()
+        table.add_row([name, params])
+        total_params += params
+    logger.info(table)
+    logger.info(f"Total Trainable Params: {total_params}")
+    return total_params
 
 if __name__ == '__main__':
     # prepare config
@@ -713,4 +821,4 @@ if __name__ == '__main__':
         logger.info(config)
         shutil.copy(args.config, config.OUTPUT)
 
-    main(config)
+    main(config, args.eps)

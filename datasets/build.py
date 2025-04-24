@@ -276,41 +276,6 @@ class FrameDataset(BaseDataset):
         return video_infos
 
 
-class FrameDatasetV2(BaseDataset):
-    def __init__(self, ann_file, pipeline, labels_file, start_index=0, **kwargs):
-        super().__init__(ann_file, pipeline, start_index=start_index, **kwargs)
-        self.labels_file = labels_file
-
-    @property
-    def classes(self):
-        classes_all = pd.read_csv(self.labels_file)
-        return classes_all.values.tolist()
-
-    def load_annotations(self):
-        """Load annotation file to get video information."""
-        vid = 0
-        video_infos = []
-        
-        gt = None
-        with open(os.path.join(self.cfg.OUTPUT, 'advtrain_labels.json')) as json_data:
-            gt = json.load(json_data)
-            json_data.close()
-            
-        with open(self.ann_file, 'r') as fin:
-            for line in fin:
-                line_split = line.strip().split()
-                if len(line_split) == 4:
-                    filename, start, end, label = line_split
-                
-                label = gr['prd'][filename]
-                
-                if self.data_prefix is not None and self.data_prefix not in filename:
-                    filename = osp.join(self.data_prefix, filename)
-                video_infos.append(dict(frame_dir=filename, label=label, total_frames=int(end)-int(start), tar=self.use_tar_format, vid=vid))
-                vid += 1
-        return video_infos
-
-
 class RawFramesTestDataset(BaseDataset):
     def __init__(self, ann_file, pipeline, labels_file, start_index=0, **kwargs):
         super().__init__(ann_file, pipeline, start_index=start_index, **kwargs)
@@ -517,21 +482,6 @@ def build_dataloader(logger, config):
     test_data = RawFramesTestDataset(ann_file=config.DATA.VAL_FILE, data_prefix=config.DATA.ROOT,
                             labels_file=config.DATA.LABEL_LIST, filename_tmpl=config.DATA.FILENAME_TMPL,
                             pipeline=test_pipeline, seg_interval=config.DATA.NUM_FRAMES*config.DATA.FRAME_INTERVAL)
-
-    # test_pipeline = [
-    #     dict(type='SampleFrames', clip_len=config.DATA.NUM_FRAMES, frame_interval=config.DATA.FRAME_INTERVAL,
-    #          num_clips=16, test_mode=True),
-    #     dict(type='RawFrameDecode'),
-    #     dict(type='Resize', scale=(-1, scale_resize)),
-    #     dict(type='CenterCrop', crop_size=config.DATA.INPUT_SIZE),
-    #     dict(type='Normalize', **img_norm_cfg),
-    #     dict(type='FormatShape', input_format='NCTHW'),
-    #     dict(type='Collect', keys=['imgs', 'label', 'vid'], meta_keys=[]),
-    #     dict(type='ToTensor', keys=['imgs'])
-    # ]
-    # test_data = FrameDataset(ann_file=config.DATA.VAL_FILE, data_prefix=config.DATA.ROOT,
-    #                           filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-    #                           pipeline=test_pipeline)
 
     sampler_test = torch.utils.data.SequentialSampler(test_data)
     test_loader = DataLoader(

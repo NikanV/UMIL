@@ -176,6 +176,7 @@ class XCLIP(CLIP):
                     "y": logits,
                     "y_cluster_all": logits_u,
                     "feature_v": video_features,
+                    "feature_t": text_features,
                     "y_cluster_all_nograd": logits_u_n
                 }
             return outputs

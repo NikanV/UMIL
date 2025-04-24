@@ -10,3 +10,4 @@ yacs
 scikit-learn
 matplotlib
 pandas
+prettytable

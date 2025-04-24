@@ -2112,9 +2112,9 @@ class RawFrameDecode:
         for frame_idx in results['frame_inds']:
             frame_idx += offset
             if modality == 'RGB':
-                if 'start_index' in results:
-                    filepath = osp.join(directory, filename_tmpl.format(frame_idx+results['start_index']))
-                    # filepath = os.path.join(directory, all_files[frame_idx + results['start_index']])
+                if 'start' in results:
+                    filepath = osp.join(directory, filename_tmpl.format(frame_idx+results['start']))
+                    # filepath = os.path.join(directory, all_files[frame_idx + results['start']])
                 else:
                     filepath = osp.join(directory, filename_tmpl.format(frame_idx))
                     # filepath = os.path.join(directory, all_files[frame_idx])

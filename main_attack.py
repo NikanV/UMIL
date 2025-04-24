@@ -40,7 +40,7 @@ def parse_option():
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--accumulation-steps', type=int)
     # model parameters
-    parser.add_argument("--local_rank", type=int, default=-1, help='local rank for DistributedDataParallel')
+    parser.add_argument("--local-rank", type=int, default=-1, help='local rank for DistributedDataParallel')
     parser.add_argument('--w-smooth', default=0.01, type=float, help='weight of smooth loss')
     parser.add_argument('--w-sparse', default=0.001, type=float, help='weight of sparse loss')
     # attack parameters
