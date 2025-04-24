@@ -109,7 +109,7 @@ def main(config, eps):
     
     if config.TEST.ONLY_TEST:
         model.eval()
-        scores_dict = gen_labels(val_loader_train, text_labels, model, config)
+        scores_dict = gen_labels(train_loader, text_labels, model, config)
         return
     
     gt = None
@@ -117,7 +117,7 @@ def main(config, eps):
         # gt = json.load(json_data)
         gt = mmcv.load(json_data, file_format='json')
         json_data.close()
-    vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
+    vid2key = {vid: key for vid, key in enumerate(sorted(gt['prd'].keys()))}
     
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
     
@@ -141,8 +141,8 @@ def main(config, eps):
     
     for epoch in range(start_epoch, config.TRAIN.EPOCHS):
         train_loader.sampler.set_epoch(epoch)
-        mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, vid2key, eps)
-
+        mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, eps)
+        
         # calculate training statics
         if epoch % 1 == 0 and epoch >= (args.umil_epoch-5):
             out_path = os.path.join(config.OUTPUT, 'train_data_' + str(epoch) + '.pkl')
@@ -195,58 +195,19 @@ def main(config, eps):
                         data_dict['mask'][key] = (pseudo_label == 0) * (score_var < pseudo_threshold_nor) + \
                                                  (pseudo_label == 1) * (score_var < pseudo_threshold_ano)
                         data_dict['label'][key] = pseudo_label
-        # val
-        out_path = os.path.join(config.OUTPUT, 'mil_epoch_'+str(epoch)+'.pkl')
-        scores_dict = validate(val_loader, text_labels, model, config, out_path)
-
-        tmp_dict = {}
-        for v_name in scores_dict["cls"].keys():
-            p_scores = np.array(scores_dict["prd"][v_name]).copy()
-            c_scores = np.array(scores_dict["cls"][v_name]).copy()
-
-            if p_scores.shape[0] == 1:
-                # 1,32,2
-                tmp_dict[v_name] = [p_scores[0, :, 1] + args.w_cls * c_scores[0, :, 1]]
-            else:
-                # T,1,2
-                tmp_dict[v_name] = [p_scores[:, 0, 1] + args.w_cls * c_scores[:, 0, 1]]
-        auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-        is_best = auc_all > max_auc
-        max_auc = max(max_auc, auc_all)
-        logger.info(f"Auc of MIL on epoch {epoch}: {auc_all:.4f}({auc_ano:.4f})")
-        logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
 
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
+            epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, False)
 
         if epoch >= args.umil_epoch:
             train_loader_umil.sampler.set_epoch(epoch)
             umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, train_loader_umil, text_labels, config, data_dict,
-                          vid_list, gt, vid2key, eps)
-            #val
-            out_path = os.path.join(config.OUTPUT, 'umil_epoch_' + str(epoch) + '.pkl')
-            scores_dict = validate(val_loader, text_labels, model, config, out_path)
-            tmp_dict = {}
-            for v_name in scores_dict["cls"].keys():
-                p_scores = np.array(scores_dict["prd"][v_name]).copy()
-                c_scores = np.array(scores_dict["cls"][v_name]).copy()
+                          vid_list, gt, eps)
 
-                if p_scores.shape[0] == 1:
-                    # 1,32,2
-                    tmp_dict[v_name] = [p_scores[0, :, 1] + args.w_cls * c_scores[0, :, 1]]
-                else:
-                    # T,1,2
-                    tmp_dict[v_name] = [p_scores[:, 0, 1] + args.w_cls * c_scores[:, 0, 1]]
-            auc_all_u, auc_ano_u = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-            is_best = auc_all_u > max_auc
-            max_auc = max(max_auc, auc_all_u)
-            logger.info(f"Auc of UMIL on epoch {epoch}: {auc_all_u:.4f}({auc_ano_u:.4f})")
-            logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
+            if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+                epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, False)
 
-            if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)) and auc_all_u>auc_all:
-                epoch_saving(config, epoch, model, max_auc, optimizer, optimizer_umil, lr_scheduler, lr_scheduler_umil, logger, config.OUTPUT, is_best)
-
-def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, vid2key, eps):
+def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, eps):
     model.train()
 
     optimizer.zero_grad()
@@ -281,8 +242,18 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
             texts = texts.view(1, -1)
 
         original_images = images.clone().detach()
-        adv_images = get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps)
-
+        
+        adv_labels = []
+        if int(label_id[0]) == 0:
+            adv_labels = [0] * n_clips
+        else:
+            adv_labels = [gt['prd'][str(int(batch_data['vid'][0]))][str(int(clip_idx))] for clip_idx in batch_data['frame_inds'][0][::5]]
+        
+        adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
+        
+        # save_image(original_images[0][0], "original")
+        # save_image(adv_images[0][0], "adv")
+        
         output = model(adv_images, texts)
         # mil loss on max scores among bags, view instance of max scores as labeled data
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug, )
@@ -449,7 +420,7 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
 def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, train_loader, text_labels, config, data_dict,
-                    vid_list, gt, vid2key, eps):
+                    vid_list, gt, eps):
     assert data_dict['length'] > 1
     model.train()
 
@@ -513,7 +484,14 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
 
         if mask_target.sum() > 2:
             original_images = images.clone().detach()
-            adv_images = get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps)
+        
+            adv_labels = []
+            if label_id == 0:
+                adv_labels = [0] * n_clips
+            else:
+                adv_labels = [gt['prd'][str(int(batch_data['vid'][0]))][str(int(clip_idx))] for clip_idx in batch_data['frame_inds'][0][::5]]
+                
+            adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
             
             output = model(adv_images, texts)
             bk_feat = rearrange(output['feature_v'], '(b a k) c -> b a k c', b=bz, a=a_aug, )
@@ -587,7 +565,7 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
-def get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps, num_attack_steps=10):
+def get_adv_images(original_images, bz, a_aug, n_clips, model, texts, labels, eps, num_attack_steps=10):
     step_size = 2.5 * (eps / num_attack_steps)
     
     adv_images = original_images.clone().detach() # 16,5,3,224,224
@@ -600,26 +578,17 @@ def get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps, num_
         scores_cls = F.softmax(output['y_cluster_all'], dim=-1)
         
         scores_prd = rearrange(scores_prd, '(b a k) c -> (b a) k c', b=bz, a=a_aug)
-        scores_np_prd = scores_prd.cpu().data.numpy().copy()
         scores_cls = rearrange(scores_cls, '(b a k) c -> (b a) k c', b=bz, a=a_aug)
-        scores_np_cls = scores_cls.cpu().data.numpy().copy()
             
-        logits = scores_np_prd[:, :, 1] + args.w_cls * scores_np_cls[:, :, 1]
+        logits = scores_prd[:, :, 1] + args.w_cls * scores_cls[:, :, 1]
+        logits = logits.reshape(-1)
+        labels_binary = torch.tensor(labels).cuda().float()
+        labels_binary = labels_binary.repeat_interleave(2)
         
-        logger.info(f"Size of scores: {scores_np_prd.shape}")
-        logger.info(f"Size of logits: {logits.shape}")
+        # logger.info(f"size logits: {logits.shape}, size labels: {labels_binary.shape}")
         
-        # TODO: Needs to be checked!
-        
-        labels_binary = (label_id > 0).float().expand(logits.shape)
-        # labels_binary = torch.tensor(labels).cuda().float()
-        # logger.info(f"Size of labels: {labels_binary.shape}")
-
         coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
         cost = torch.dot(coef, logits)
-        
-        # logger.info(f"Size of coef: {coef.shape}, {coef}")
-        # logger.info(f"Size of cost: {cost.shape}, {cost}")
         
         cost.backward()
 
@@ -627,6 +596,7 @@ def get_adv_images(original_images, bz, a_aug, model, texts, label_id, eps, num_
         adv_images = adv_images.detach() + step_size * grad_sign
         perturbation = torch.clamp(adv_images - original_images, min=-eps, max=eps)
         adv_images = torch.clamp(original_images + perturbation, 0, 1)
+        
     return adv_images
 
 @torch.no_grad()
@@ -648,26 +618,30 @@ def gen_labels(data_loader, text_labels, model, config):
         scores_dict = dict()
         scores_dict['prd'] = dict()
         for idx, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
-            _image = batch_data["imgs"].cuda()
-            label_id = batch_data["label"].cuda()
-            label_id = label_id.reshape(-1)
+            _image = batch_data["imgs"][:,0].cuda()
             b, n, c, t, h, w = _image.size()
             _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
             output = model(_image, text_inputs)
 
             scores_prd = F.softmax(output['y'], dim=-1)
             scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)
-            scores_np_prd = scores_prd.cpu().data.numpy()
-
-            v_name = "01_Accident_001.mp4"
-            for ind in range(scores_np_prd.shape[0]):                    
-                v_name = vid_list[batch_data["vid"][ind]]
+            scores_np_prd = scores_prd.cpu().data.numpy() # b, 16, 2
+            
+            v_name = None
+            for b_ind in range(b):
+                # v_name = vid_list[batch_data["vid"][b_ind]]
+                v_name = int(batch_data["vid"][b_ind])
                 if v_name not in scores_dict['prd']:
-                    scores_dict['prd'][v_name] = []
-                scores_dict['prd'][v_name].append(np.argmax(scores_np_prd[ind]))
+                    scores_dict['prd'][v_name] = {}
+                pseudo_labels = np.argmax(scores_np_prd[b_ind], axis=1)
+                clip_indices = batch_data['frame_inds'][b_ind][::5]
+                
+                for clip_idx, pseudo_label in zip(clip_indices, pseudo_labels):
+                    scores_dict['prd'][v_name][int(clip_idx)] = int(pseudo_label)
 
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
-        json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=NpEncoder)
+        # json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=NpEncoder)
+        mmcv.dump(scores_dict, fp, file_format='json')
 
     return scores_dict
 

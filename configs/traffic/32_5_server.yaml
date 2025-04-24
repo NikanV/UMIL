@@ -1,9 +1,9 @@
 DATA:
-    ROOT: '/home/user01/nikan/UMIL/TAD/'
+    ROOT: '../TAD/'
     TRAIN_FILE: 'labels/TAD_train.txt'
     VAL_FILE: 'labels/TAD_test.txt'
     DATASET: traffic
-    NUM_CLIPS: 11
+    NUM_CLIPS: 16
     NUM_FRAMES: 5
     FRAME_INTERVAL: 6
     NUM_CLASSES: 2
