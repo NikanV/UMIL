@@ -90,6 +90,7 @@ def main(config, eps, num_attack_steps=10):
     
     vid_list = get_vid_list(config)
     scores_dict = dict()
+    scores_dict['cls'] = dict()
     scores_dict['prd'] = dict()    
 
     text_labels = generate_text(train_data)
@@ -101,19 +102,20 @@ def main(config, eps, num_attack_steps=10):
     curr_vid = -1
     vid_gt = None
     for idx, batch_data in tqdm(enumerate(test_loader), total=len(test_loader)):
-        if int(batch_data['vid'][0]) != curr_vid:
-            curr_vid = int(batch_data['vid'][0])
-            vid_gt = gt[vid2key[curr_vid]]
-            
         images = batch_data["imgs"].cuda()
         b, n, c, t, h, w = images.size()
-        labels = vid_gt[:t]
-        vid_gt = vid_gt[t:]
+        
+        labels = []
+        for b_idx in range(b):
+            if int(batch_data['vid'][b_idx]) != curr_vid:
+                curr_vid = int(batch_data['vid'][b_idx])
+                vid_gt = gt[vid2key[curr_vid]]
+                
+            labels.append(max(vid_gt[:t]))
+            vid_gt = vid_gt[t:]
         
         images = rearrange(images, 'b n c t h w -> (b n) t c h w')
-            
-        # logger.info(f"Size of batch data: {images.shape}, {label_id}")
-        
+                    
         original_images = images.clone().detach()
         adv_images = images.clone().detach()        
         
@@ -127,13 +129,14 @@ def main(config, eps, num_attack_steps=10):
             scores_cls = F.softmax(output['y_cluster_all'], dim=-1)
             
             scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)
-            scores_np_prd = scores_prd.cpu().data.numpy().copy()
+            # scores_np_prd = scores_prd.cpu().data.numpy().copy()
             scores_cls = rearrange(scores_cls, '(b n) c -> b n c', b=b)
-            scores_np_cls = scores_cls.cpu().data.numpy().copy()
+            # scores_np_cls = scores_cls.cpu().data.numpy().copy()
 
-            logits = scores_np_prd[0, :, 1] + args.w_cls * scores_np_cls[0, :, 1]    
-            labels_binary = torch.tensor(max(labels)).reshape(1).cuda().float()
-        
+            logits = scores_prd[:, :, 1] + args.w_cls * scores_cls[:, :, 1]    
+            logits = logits.reshape(-1)
+            labels_binary = torch.tensor(labels).cuda().float()
+            
             coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
             cost = torch.dot(coef, logits)
             
