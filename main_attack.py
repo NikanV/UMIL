@@ -16,7 +16,7 @@ import time
 import numpy as np
 import random
 import mmcv
-from apex import amp
+# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange

@@ -16,7 +16,7 @@ import time
 import numpy as np
 import random
 import mmcv
-from apex import amp
+# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
@@ -176,11 +176,7 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
 
         if config.TRAIN.ACCUMULATION_STEPS == 1:
             optimizer.zero_grad()
-        if config.TRAIN.OPT_LEVEL != 'O0':
-            with amp.scale_loss(total_loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            total_loss.backward()
+        total_loss.backward()
         if config.TRAIN.ACCUMULATION_STEPS > 1:
             if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
                 optimizer.step()

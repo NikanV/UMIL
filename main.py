@@ -16,7 +16,7 @@ import time
 import numpy as np
 import random
 import mmcv
-from apex import amp
+# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
@@ -64,9 +64,7 @@ def main(config):
 
     optimizer, _ = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
-    if config.TRAIN.OPT_LEVEL != 'O0':
-        model, optimizer = amp.initialize(models=model, optimizers=optimizer, opt_level=config.TRAIN.OPT_LEVEL)
-
+    
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=False)
 
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
@@ -200,11 +198,7 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
 
         if config.TRAIN.ACCUMULATION_STEPS == 1:
             optimizer.zero_grad()
-        if config.TRAIN.OPT_LEVEL != 'O0':
-            with amp.scale_loss(total_loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            total_loss.backward()
+        total_loss.backward()
         if config.TRAIN.ACCUMULATION_STEPS > 1:
             if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
                 optimizer.step()

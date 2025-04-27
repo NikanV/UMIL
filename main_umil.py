@@ -17,7 +17,7 @@ import time
 import numpy as np
 import random
 import mmcv
-from apex import amp
+# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
@@ -88,9 +88,6 @@ def main(config):
     optimizer, optimizer_umil = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
     lr_scheduler_umil = build_scheduler(config, optimizer_umil, len(train_loader_umil))
-
-    if config.TRAIN.OPT_LEVEL != 'O0':
-        model, [optimizer, optimizer_umil] = amp.initialize(models=model, optimizers=[optimizer, optimizer_umil], opt_level=config.TRAIN.OPT_LEVEL)
 
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
 
@@ -415,11 +412,7 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
 
         if config.TRAIN.ACCUMULATION_STEPS == 1:
             optimizer.zero_grad()
-        if config.TRAIN.OPT_LEVEL != 'O0':
-            with amp.scale_loss(total_loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            total_loss.backward()
+        total_loss.backward()
         if config.TRAIN.ACCUMULATION_STEPS > 1:
             if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
                 optimizer.step()
@@ -562,18 +555,14 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
 
         if config.TRAIN.ACCUMULATION_STEPS == 1:
             optimizer_umil.zero_grad()
-        if config.TRAIN.OPT_LEVEL != 'O0':
-            with amp.scale_loss(total_loss, optimizer_umil) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            total_loss.backward()
+        total_loss.backward()
         if config.TRAIN.ACCUMULATION_STEPS > 1:
             if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
                 optimizer_umil.step()
                 optimizer_umil.zero_grad()
                 lr_scheduler_umil.step_update(epoch * num_steps + idx)
         else:
-            optimize_umilr.step()
+            optimizer_umil.step()
             lr_scheduler_umil.step_update(epoch * num_steps + idx)
 
         torch.cuda.synchronize()
