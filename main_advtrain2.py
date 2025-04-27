@@ -121,6 +121,19 @@ def main(config, eps):
     
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
     
+    if config.TRAIN.AUTO_RESUME:
+        resume_file = auto_resume_helper(config.OUTPUT)
+        if resume_file:
+            config.defrost()
+            config.MODEL.RESUME = resume_file
+            config.freeze()
+            logger.info(f'auto resuming from {resume_file}')
+        else:
+            logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
+
+    if config.MODEL.RESUME:
+        start_epoch, _ = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
+    
     data_dict = {}
     data_dict['mask'] = {}
     data_dict['label'] = {}
@@ -247,7 +260,7 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
         if int(label_id[0]) == 0:
             adv_labels = [0] * n_clips
         else:
-            adv_labels = [gt['prd'][str(int(batch_data['vid'][0]))][str(int(clip_idx))] for clip_idx in batch_data['frame_inds'][0][::5]]
+            adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
         
         adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
         
@@ -485,11 +498,7 @@ def umil_one_epoch(epoch, model, criterion, optimizer_umil, lr_scheduler_umil, t
         if mask_target.sum() > 2:
             original_images = images.clone().detach()
         
-            adv_labels = []
-            if label_id == 0:
-                adv_labels = [0] * n_clips
-            else:
-                adv_labels = [gt['prd'][str(int(batch_data['vid'][0]))][str(int(clip_idx))] for clip_idx in batch_data['frame_inds'][0][::5]]
+            adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
                 
             adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
             
@@ -629,15 +638,13 @@ def gen_labels(data_loader, text_labels, model, config):
             
             v_name = None
             for b_ind in range(b):
-                # v_name = vid_list[batch_data["vid"][b_ind]]
                 v_name = int(batch_data["vid"][b_ind])
                 if v_name not in scores_dict['prd']:
-                    scores_dict['prd'][v_name] = {}
+                    scores_dict['prd'][v_name] = []
                 pseudo_labels = np.argmax(scores_np_prd[b_ind], axis=1)
-                clip_indices = batch_data['frame_inds'][b_ind][::5]
                 
-                for clip_idx, pseudo_label in zip(clip_indices, pseudo_labels):
-                    scores_dict['prd'][v_name][int(clip_idx)] = int(pseudo_label)
+                for p_l in pseudo_labels:
+                    scores_dict['prd'][v_name].append(p_l)
 
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
         # json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=NpEncoder)
