@@ -1332,8 +1332,10 @@ class Normalize:
             for i, img in enumerate(results['imgs']):
                 imgs[i] = img
 
-            for img in imgs:
-                mmcv.imnormalize_(img, self.mean, self.std, self.to_bgr)
+            # for img in imgs:
+            #     mmcv.imnormalize_(img, self.mean, self.std, self.to_bgr)
+            for i in range(len(imgs)):
+                imgs[i] /= 255.0
             results['imgs'] = imgs
             results['img_norm_cfg'] = dict(
                 mean=self.mean, std=self.std, to_bgr=self.to_bgr)

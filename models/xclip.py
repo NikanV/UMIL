@@ -84,6 +84,9 @@ class XCLIP(CLIP):
         self.u_head_video = nn.Linear(embed_dim, embed_dim)
 
         self.initialize_parameters()
+        
+        self.mean = torch.tensor([123.675, 116.28, 103.53]).view(1, 1, 3, 1, 1).cuda()
+        self.std = torch.tensor([58.395, 57.12, 57.375]).view(1, 1, 3, 1, 1).cuda()
     
     @torch.jit.ignore
     def no_weight_decay_keywords(self):
@@ -149,6 +152,8 @@ class XCLIP(CLIP):
 
     def forward(self, image, text):
         b = image.shape[0]
+        
+        image = (image * 255.0 - self.mean) / self.std
 
         video_features, img_features = self.encode_video(image)
 
