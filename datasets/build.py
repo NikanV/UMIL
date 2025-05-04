@@ -31,6 +31,10 @@ from torch.utils.data.dataloader import default_collate
 from mmcv.parallel import collate
 import pandas as pd
 
+import sys
+sys.path.append("..")
+from utils.oe import AnomalyGenerator
+
 PIPELINES = Registry('pipeline')
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False)
@@ -101,6 +105,7 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
                  filename_tmpl='img_{:08}.jpg',
                  seg_interval=30,
                  power=0,
+                 pseudo_anomaly=False,
                  dynamic_length=False,):
         super().__init__()
         self.use_tar_format = True if ".tar" in data_prefix else False
@@ -120,6 +125,9 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         self.power = power
         self.seg_interval = seg_interval
         self.dynamic_length = dynamic_length
+        
+        self.pseudo_anomaly = pseudo_anomaly
+        self.anomaly_transform = AnomalyGenerator()
 
         assert not (self.multi_class and self.sample_by_class)
 
@@ -233,7 +241,23 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         if self.test_mode:
             return self.prepare_test_frames(idx)
 
-        return self.prepare_train_frames(idx)
+        results = self.prepare_train_frames(idx)
+        
+        if results['vid'] == 1 or not self.pseudo_anomaly or np.random.rand(1)[0] >= 0.5:
+            return results
+        
+        a, k, c, t, h, w = results['imgs'].shape # 2, 16, 3, 5, 224, 244
+        aug_offset = np.random.randint(t)
+        aug_length = np.random.randint(1, t - aug_offset + 1)
+        
+        results['pa_labels'] = torch.zeros(a, k)
+        for i in range(aug_offset, aug_offset + aug_length):
+            results['imgs'][0, i] = self.anomaly_transform(results['imgs'][0, i].permute(1, 0, 2, 3)).permute(1, 0, 2, 3)
+            results['imgs'][1, i] = self.anomaly_transform(results['imgs'][1, i].permute(1, 0, 2, 3)).permute(1, 0, 2, 3)
+            results['pa_labels'][0, i] = 1
+            results['pa_labels'][1, i] = 1
+        
+        return results
 
 
 class FrameDataset(BaseDataset):
@@ -416,7 +440,7 @@ def build_dataloader(logger, config):
         
     train_data = FrameDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
                               filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-                              pipeline=train_pipeline, pipeline_=train_pipeline_S)
+                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.AUG.PSEUDO_ANOMALY)
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     sampler_train = torch.utils.data.DistributedSampler(

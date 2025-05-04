@@ -63,7 +63,7 @@ def parse_option():
 
     parser.add_argument('--w-cls', default=0, type=float, help='weight of cluster anomaly score')
     # attack parameters
-    parser.add_argument('--eps', default=2/255, type=float, help='epsilon')
+    parser.add_argument('--eps', default=0/255, type=float, help='epsilon')
 
     args = parser.parse_args()
 

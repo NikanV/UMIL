@@ -65,16 +65,10 @@ def evaluate_result(vid2abnormality, anno_file, root=''):
             ans.extend(cur_ans.tolist())
         GT.extend(cur_gt.tolist())
         ANS.extend(cur_ans.tolist())
-    
-    # GT_tmp = np.array(GT)
-    # ANS_tmp = np.array(ANS)
-    # valid_mask = ~np.isnan(GT_tmp) & ~np.isnan(ANS_tmp) & ~np.isinf(GT_tmp) & ~np.isinf(ANS_tmp)
-    
+        
     ret = roc_auc_score(gt, ans)
     Ret = roc_auc_score(GT, ANS)
-    # Ret = roc_auc_score(GT_tmp[valid_mask], ANS_tmp[valid_mask])
     fpr, tpr, threshold = roc_curve(GT, ANS)
-    # fpr, tpr, threshold = roc_curve(GT_tmp[valid_mask], ANS_tmp[valid_mask])
 
     if root != '':
         output_file = os.path.join(root, "AUC.npz")
@@ -100,6 +94,12 @@ def reduce_tensor(tensor, n=None):
     rt = rt / n
     return rt
    
+def save_image(image, name, logger, config):
+    image = image.detach().cpu().clamp(0, 1)
+    image = image.permute(1, 2, 0).numpy()
+    path = os.path.join(config.OUTPUT, f"{name}.png")
+    plt.imsave(path, image)
+    logger.info(f"Saved {path}!")
 
 class AverageMeter:
     """Computes and stores the average and current value"""
@@ -137,7 +137,7 @@ def epoch_saving(config, epoch, model, max_accuracy, optimizer, lr_scheduler, op
                   'max_accuracy': max_accuracy,
                   'epoch': epoch,
                   'config': config}
-    if (epoch + 1) % 10 == 0:
+    if (epoch + 1) % 5 == 0:
         save_path = os.path.join(working_dir, f'ckpt_epoch_{epoch}.pth')
         logger.info(f"{save_path} saving......")
         torch.save(save_state, save_path)
