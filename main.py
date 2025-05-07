@@ -91,7 +91,7 @@ def main(config):
             if "kaggle" in model_path:
                 out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
             else:
-                out_path = model_path.replace('pth','pkl').replace('pt','pkl')
+                out_path = os.path.join(config.OUTPUT, model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:

@@ -584,7 +584,7 @@ def get_adv_images(original_images, bz, a_aug, n_clips, model, texts, labels, ep
         logits = scores_prd[:, :, 1] + args.w_cls * scores_cls[:, :, 1]
         logits = logits.reshape(-1)
         labels_binary = torch.tensor(labels).cuda().float()
-        labels_binary = labels_binary.repeat_interleave(2)
+        labels_binary = labels_binary.repeat(2)
         
         # logger.info(f"size logits: {logits.shape}, size labels: {labels_binary.shape}")
         
