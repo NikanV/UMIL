@@ -50,6 +50,15 @@ _C.TRAIN.AUTO_RESUME = False
 _C.TRAIN.USE_CHECKPOINT = False
 
 # -----------------------------------------------------------------------------
+# Adv. Training settings
+# -----------------------------------------------------------------------------
+_C.ADV_TRAIN = CN()
+_C.ADV_TRAIN.EPS = 2.0
+_C.ADV_TRAIN.LOSS = 'mil'
+_C.ADV_TRAIN.PSEUDO_LABEL = False
+_C.ADV_TRAIN.PSEUDO_ANOMALY = False
+
+# -----------------------------------------------------------------------------
 # Augmentation settings
 # -----------------------------------------------------------------------------
 _C.AUG = CN()
@@ -59,7 +68,6 @@ _C.AUG.GRAY_SCALE = 0.2
 _C.AUG.MIXUP = 0.0
 _C.AUG.CUTMIX = 1.0
 _C.AUG.MIXUP_SWITCH_PROB = 0.5
-_C.AUG.PSEUDO_ANOMALY = False
 
 # -----------------------------------------------------------------------------
 # Testing settings

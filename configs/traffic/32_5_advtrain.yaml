@@ -16,5 +16,9 @@ TRAIN:
     BATCH_SIZE_UMIL: 1
     ACCUMULATION_STEPS: 8
     AUTO_RESUME: False
-AUG:
+ADV_TRAIN:
+    PSEUDO_ANOMALY: False
+    EPS: 2.0
+    LOSS: 'mil'
+    PSEUDO_LABEL: False
     PSEUDO_ANOMALY: False

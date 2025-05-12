@@ -12,33 +12,9 @@ import torch
 import numpy as np
 from scipy.ndimage import gaussian_filter, label
 import matplotlib.pyplot as plt
-import mmcv
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False)
-
-def generate_connected_blobby_mask(
-    shape=(1, 1, 224, 224),
-    sigma=10,
-    threshold=0.5,
-    device='cpu'):    
-    h, w = shape
-    random_noise = torch.rand((h, w)).numpy()
-    smoothed = gaussian_filter(random_noise, sigma=sigma)
-    binary_mask = (smoothed > threshold).astype(np.uint8)
-    labeled_array, num_features = label(binary_mask)
-    if num_features > 0:
-        sizes = np.bincount(labeled_array.ravel())
-        sizes[0] = 0
-        largest_label = sizes.argmax()
-        connected_mask = (labeled_array == largest_label).astype(np.float32)
-    else:
-        connected_mask = np.zeros((h, w), dtype=np.float32)
-
-    mask_tensor = torch.tensor(connected_mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    mask_tensor = mask_tensor.to(device)
-    return mask_tensor
-
 
 class RandomAugmentations:
     def __init__(self, seed=None):
@@ -184,101 +160,76 @@ class RandomAugmentations:
 
 class AnomalyGenerator(object):
     def __init__(self, seed=None):
-        self.lower_bound = 9
-        self.upper_bound = 12
-        
-        self.random_augmentor = RandomAugmentations(seed=seed)
-        
         self.mean = np.array(img_norm_cfg['mean'], dtype=np.float32)
         self.std = np.array(img_norm_cfg['std'], dtype=np.float32)
         self.to_bgr = img_norm_cfg['to_bgr']
+        
+        self.random = random.Random(seed)
         self.min_speed = 20
-        self.max_speed = 40
-        
-    def set_seed(self, seed):
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        self.max_speed = 35
 
-    def rotate(self, patch, width, height, min_angle=-90, max_angle=90):
-        random_rotate = random.uniform(min_angle, max_angle)
-        patch = patch.convert("RGBA").rotate(random_rotate, expand=True)
-        patch = patch.resize((width, height), resample=Image.BICUBIC)
-        mask = patch.split()[-1]
-        
-        return patch.convert("RGB"), mask
-
-    def intersect_masks(self, mask1, mask2):
-        mask1_np = np.array(mask1)
-        mask2_np = np.array(mask2)
+        self.augmentor = transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
     
-        intersection = np.logical_and(mask1_np, mask2_np).astype(np.uint8) * 255
-        intersection_mask = Image.fromarray(intersection)
-    
-        return intersection_mask
-    
-    def expand_mask(self, mask, kernel_size=(3, 3)):
-        kernel = np.ones(kernel_size, np.uint8)
-        expanded_mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=10)
-        
-        return expanded_mask
-    
-    def sample_coordinate_shape(self, foreground_mask):
-        foreground_mask = self.expand_mask(foreground_mask)
-        h, w = foreground_mask.shape
-        coords = np.column_stack(np.where(foreground_mask == 1))
-
-        patch_width = random.randint(int(w*0.1), int(w*0.6))
-        patch_height =  random.randint(int(h*0.1), int(h*0.6))
-
-        y1, x1 = coords[random.randint(0, len(coords) - 1)]
-        y2 = random.randint(0, h - patch_height - 2)
-        x2 = random.randint(0, w - patch_width - 2)
-
-        return x1, y1, x2, y2, patch_width, patch_height
+    def generate_blob_mask(self, height, width, sigma=14, threshold=0.5, device='cpu'):
+        # create smooth random noise and threshold to single largest connected region
+        rnd = torch.rand((height, width)).numpy()
+        sm = cv2.GaussianBlur(rnd, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        binary = (sm > threshold).astype(np.uint8)
+        num_labels, labels = cv2.connectedComponents(binary)
+        if num_labels > 1:
+            # pick largest blob (skip background label=0)
+            sizes = [(labels == i).sum() for i in range(1, num_labels)]
+            largest = np.argmax(sizes) + 1
+            mask = (labels == largest).astype(np.uint8)
+        else:
+            mask = np.zeros((height, width), dtype=np.uint8)
+        return mask
     
     def __call__(self, imgs):
-        t, c, h, w = imgs.shape
-
-        angle = np.random.rand() * 2 * np.pi
-        speed = np.random.uniform(self.min_speed, self.max_speed)
+        """
+        imgs: tensor [T, C, H, W], float in [0,1]
+        returns: tensor [T, C, H, W], float in [0,1]
+        """
+        T, C, H, W = imgs.shape
+        # random movement vector
+        angle = self.random.uniform(0, 2 * np.pi)
+        speed = self.random.uniform(self.min_speed, self.max_speed)
         dx, dy = speed * np.cos(angle), speed * np.sin(angle)
 
-        fg_mask = generate_connected_blobby_mask((h, w), sigma=14, threshold=0.5)
-        x1_0, y1_0, _, _, patch_w, patch_h = self.sample_coordinate_shape(fg_mask.cpu().squeeze().numpy())
+        # generate mask and choose patch size
+        mask = self.generate_blob_mask(H, W)
+        pw = self.random.randint(int(W * 0.1), int(W * 0.5))
+        ph = self.random.randint(int(H * 0.1), int(H * 0.5))
 
-        transformed = []
-        for i in range(t):
-            x1 = int(x1_0 + dx * i)
-            y1 = int(y1_0 + dy * i)
-            x2 = x1 + int(patch_w)
-            y2 = y1 + int(patch_h)
+        # pick a patch center near image center with small jitter
+        cx, cy = W // 2, H // 2
+        max_jitter_x = int(W * 0.1)
+        max_jitter_y = int(H * 0.1)
+        jitter_x = self.random.randint(-max_jitter_x, max_jitter_x)
+        jitter_y = self.random.randint(-max_jitter_y, max_jitter_y)
+        x0 = np.clip(cx - pw // 2 + jitter_x, 0, W - pw)
+        y0 = np.clip(cy - ph // 2 + jitter_y, 0, H - ph)
 
-            x1 = np.clip(x1, 0, w - int(patch_w))
-            y1 = np.clip(y1, 0, h - int(patch_h))
-            x2, y2 = x1 + int(patch_w), y1 + int(patch_h)
+        # extract patch from first frame
+        frame0 = imgs[0].cpu().numpy().transpose(1, 2, 0)
+        pil0 = transforms.ToPILImage()(frame0)
+        patch = pil0.crop((x0, y0, x0 + pw, y0 + ph))
+        patch = self.augmentor(patch)
+        patch = patch.convert('RGBA')
+        alpha = np.array(patch.split()[-1])
+        patch_rgb = np.array(patch.convert('RGB'))
 
-            frame = imgs[i].cpu().float().numpy()
-            frame = mmcv.imdenormalize(frame.transpose(1,2,0), self.mean, self.std, self.to_bgr)
-            pil = transforms.ToPILImage()(frame)
+        outputs = []
+        for t in range(T):
+            xi = int(np.clip(x0 + dx * t, 0, W - pw))
+            yi = int(np.clip(y0 + dy * t, 0, H - ph))
 
-            # crop the moving patch out of the SAME static location on the FIRST frame—
-            # or you could crop each frame, but usually you want a single patch image.
-            if i == 0:
-                patch = pil.crop((x1, y1, x2, y2))
-                patch = self.random_augmentor.apply(patch,
-                            np.random.choice(['light','medium','heavy'], p=[0.3,0.4,0.3]))
-                patch, rotation_mask = self.rotate(patch, patch_w, patch_h)
-                mask = np.ones((patch_h, patch_w), dtype=np.uint8)
-                mask = cv2.resize(mask, (patch_w, patch_h), interpolation=cv2.INTER_CUBIC)
-                mask = self.intersect_masks(mask, rotation_mask)
+            frame = imgs[t].cpu().numpy().transpose(1, 2, 0)
+            pil_frame = transforms.ToPILImage()(frame).convert('RGBA')
+            pil_frame.paste(Image.fromarray(patch_rgb), (xi, yi), mask=Image.fromarray(alpha))
 
-            augmented = pil.copy()
-            augmented.paste(patch, (x1, y1), mask=mask)
+            out_np = np.array(pil_frame.convert('RGB'))
+            out_tensor = transforms.ToTensor()(out_np)
+            outputs.append(out_tensor)
 
-            out = np.array(augmented) * 255
-            out = mmcv.imnormalize(out, self.mean, self.std, self.to_bgr)
-            transformed.append(transforms.ToTensor()(out))
-
-        return torch.stack(transformed)
+        return torch.stack(outputs)

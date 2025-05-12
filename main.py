@@ -80,10 +80,9 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        start_epoch, max_accuracy = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
+        start_epoch, max_auc = load_checkpoint(config, model, optimizer, lr_scheduler, logger)
 
     text_labels = generate_text(train_data)
-    is_best = None
     
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
@@ -111,27 +110,30 @@ def main(config):
 
             logger.info(f"AUC@all/ano of version {out_path.split('/')[-2]} on epoch {out_path.split('/')[-1].split('_')[-1][:-4]} : {auc_all:.4f}({auc_ano:.4f})")
             return
-        else:
-            for epoch in range(config.TRAIN.EPOCHS):
-                out_path = os.path.join(model_path, 'ckpt_epoch_' + str(epoch) + '.pkl')
-                scores_dict = validate(test_loader, text_labels, model, config, out_path)
-                tmp_dict = {}
-                for v_name in scores_dict["cls"].keys():
-                    tmp_dict[v_name] = [np.array(scores_dict["prd"][v_name])[:,0]]  # 1,32,2  +
-                auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-                is_best = auc_all > max_auc
-                if is_best:
-                    best_epoch = epoch
-                max_auc = max(max_auc, auc_all)
-                logger.info(f"Auc on epoch {epoch}: {auc_all:.4f}({auc_ano:.4f})")
-                logger.info(f'Max AUC@all {best_epoch}/{epoch} : {max_auc:.4f}')
 
     for epoch in range(start_epoch, config.TRAIN.EPOCHS):
         train_loader.sampler.set_epoch(epoch)
         train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config)
 
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            epoch_saving(config, epoch, model, max_auc, optimizer, lr_scheduler,_,_, logger, config.OUTPUT, is_best)
+            out_path = os.path.join(config.OUTPUT, f"mil_epoch_{epoch}.pkl")
+            scores_dict = validate(test_loader, text_labels, model, config, out_path)
+            
+            tmp_dict = {}
+            for v_name in scores_dict["prd"].keys():
+                p_scores = np.array(scores_dict["prd"][v_name]).copy()
+                if p_scores.shape[0] == 1:
+                    # 1,32,2
+                    tmp_dict[v_name] = [p_scores[0, :, 1]]
+                else:
+                    # T,1,2
+                    tmp_dict[v_name] = [p_scores[:, 0, 1]]
+            auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
+            is_best = auc_all > max_auc
+            max_auc = max(max_auc, auc_all)
+            logger.info(f"Auc of MIL on epoch {epoch}: {auc_all:.4f}({auc_ano:.4f})")
+            logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
+            epoch_saving(config, epoch, model, max_auc, optimizer, _, lr_scheduler, _, logger, config.OUTPUT, is_best)
 
 def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict=None):
     model.train()
@@ -259,7 +261,7 @@ def validate(data_loader, text_labels, model, config, out_path):
             label_id = label_id.reshape(-1)
             b, n, c, t, h, w = _image.size()
             _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
-            output = model(_image, text_inputs)
+            output = model(_image.cuda(), text_inputs)
 
             scores_prd = F.softmax(output['y'], dim=-1)
             scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)

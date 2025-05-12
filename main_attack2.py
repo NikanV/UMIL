@@ -62,8 +62,6 @@ def parse_option():
     parser.add_argument('--w-ce', default=0.0, type=float, help='weight of ce loss')
 
     parser.add_argument('--w-cls', default=0, type=float, help='weight of cluster anomaly score')
-    # attack parameters
-    parser.add_argument('--eps', default=2/255, type=float, help='epsilon')
 
     args = parser.parse_args()
 
@@ -71,7 +69,7 @@ def parse_option():
 
     return args, config
 
-def main(config, eps, num_attack_steps=10):
+def main(config, num_attack_steps=10):
     train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                          device="cpu", jit=False, 
@@ -86,6 +84,7 @@ def main(config, eps, num_attack_steps=10):
     
     logger.info(f"Model saved to {model_path}")
     
+    eps = config.ADV_TRAIN.EPS
     step_size = 2.5 * (eps / num_attack_steps)
     
     vid_list = get_vid_list(config)
@@ -251,4 +250,4 @@ if __name__ == '__main__':
         logger.info(config)
         shutil.copy(args.config, config.OUTPUT)
 
-    main(config, args.eps)
+    main(config)

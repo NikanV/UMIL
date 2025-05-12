@@ -75,8 +75,6 @@ def parse_option():
     parser.add_argument('--w-ce', default=0.0, type=float, help='weight of ce loss')
 
     parser.add_argument('--w-cls', default=0, type=float, help='weight of cluster anomaly score')
-    # attack parameters
-    parser.add_argument('--eps', default=2/255, type=float, help='epsilon')
     
     args = parser.parse_args()
 
@@ -113,11 +111,13 @@ def main(config, eps):
         return
     
     gt = None
-    with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
-        # gt = json.load(json_data)
-        gt = mmcv.load(json_data, file_format='json')
-        json_data.close()
-    vid2key = {vid: key for vid, key in enumerate(sorted(gt['prd'].keys()))}
+    vid2key = None
+    
+    if config.ADV_TRAIN.PSEUDO_LABEL:
+        with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
+            gt = mmcv.load(json_data, file_format='json')
+            json_data.close()
+        vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
     
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
     
@@ -151,7 +151,8 @@ def main(config, eps):
     
     for name, parameter in model.named_parameters():
         parameter.requires_grad_()
-    
+        
+    eps = config.ADV_TRAIN.EPS / 255.0
     for epoch in range(start_epoch, config.TRAIN.EPOCHS):
         train_loader.sampler.set_epoch(epoch)
         mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict, vid_list, gt, eps)
@@ -257,18 +258,21 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
         original_images = images.clone().detach()
         
         adv_labels = []
-        if int(label_id[0]) == 0:
-            adv_labels = [0] * n_clips
+        if config.ADV_TRAIN.PSEUDO_LABEL:
+            if int(label_id[0]) == 0:
+                adv_labels = [0] * n_clips
+            elif 'pa_labels' in batch_data:
+                adv_labels = list(batch_data['pa_labels'][0][0])
+            else:
+                adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
         else:
-            adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
-        
+            adv_labels = label_id
+            
         adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
-        
         # save_image(original_images[0][0], "original")
         # save_image(adv_images[0][0], "adv")
         
         output = model(adv_images, texts)
-        # mil loss on max scores among bags, view instance of max scores as labeled data
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug, )
         scores = F.softmax(logits, dim=-1)
 
@@ -282,9 +286,20 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
         max_prob_video, _ = torch.max(torch.gather(scores, 1, max_ind[:, None, None].repeat((1, 1, 2))).squeeze(1),
                                       dim=-1)
         labels_binary = label_id > 0
-        loss_mil = F.cross_entropy(logits_video, labels_binary.long(), reduction='none')
-        loss_mil = loss_mil * max_prob_video
-        loss_mil = loss_mil.mean()
+        
+        # MIL loss
+        loss_mil = None
+        if config.ADV_TRAIN.LOSS == 'mil':
+            loss_mil = F.cross_entropy(logits_video, labels_binary.long(), reduction='none')
+            loss_mil = loss_mil * max_prob_video
+            loss_mil = loss_mil.mean()
+        elif config.ADV_TRAIN.LOSS == 'ce':
+            clip_labels = torch.tensor(adv_labels).cuda().long() # 16
+            clip_labels = clip_labels.unsqueeze(0).repeat(logits.size(0), 1).reshape(-1) # 16
+            clip_logits = logits.reshape(-1, 2) # 16, 2
+            loss_mil = F.cross_entropy(clip_logits, clip_labels, reduction='none')
+            loss_mil = loss_mil.mean()
+        
         loss_mar = F.binary_cross_entropy(margin_video, labels_binary.float(), reduction='none')
         loss_mar = loss_mar * max_prob_video
         loss_mar = loss_mar.mean()
@@ -374,11 +389,13 @@ def mil_one_epoch(epoch, model, criterion, optimizer, lr_scheduler, train_loader
             w_smooth = args.w_smooth
             w_sparse = args.w_sparse
 
-
-        total_loss = (loss_mil + loss_mar) * w_mil + \
+        if config.ADV_TRAIN.LOSS == 'mil':
+            total_loss = (loss_mil + loss_mar) * w_mil + \
                      consistency_loss * w_con + consistency_loss_alt * w_con1 + \
                      smoothed_loss * w_smooth + sparsity_loss * w_sparse + \
                      bce_loss * w_cluster
+        elif config.ADV_TRAIN.LOSS == 'ce':
+            total_loss = loss_mil + loss_mar
 
 
         total_loss = total_loss / config.TRAIN.ACCUMULATION_STEPS
@@ -794,4 +811,4 @@ if __name__ == '__main__':
         logger.info(config)
         shutil.copy(args.config, config.OUTPUT)
 
-    main(config, args.eps)
+    main(config)

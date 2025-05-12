@@ -440,7 +440,7 @@ def build_dataloader(logger, config):
         
     train_data = FrameDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
                               filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.AUG.PSEUDO_ANOMALY)
+                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.ADV_TRAIN.PSEUDO_ANOMALY)
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     sampler_train = torch.utils.data.DistributedSampler(
@@ -449,7 +449,7 @@ def build_dataloader(logger, config):
     train_loader = DataLoader(
         train_data, sampler=sampler_train,
         batch_size=config.TRAIN.BATCH_SIZE,
-        num_workers=8,
+        num_workers=4,
         pin_memory=True,
         drop_last=True,
         collate_fn=partial(mmcv_collate, samples_per_gpu=config.TRAIN.BATCH_SIZE),
@@ -457,7 +457,7 @@ def build_dataloader(logger, config):
     train_loader_umil = DataLoader(
         train_data, sampler=sampler_train,
         batch_size=config.TRAIN.BATCH_SIZE_UMIL,
-        num_workers=8,
+        num_workers=4,
         pin_memory=True,
         drop_last=True,
         collate_fn=partial(mmcv_collate, samples_per_gpu=config.TRAIN.BATCH_SIZE_UMIL),
@@ -486,7 +486,7 @@ def build_dataloader(logger, config):
     val_loader = DataLoader(
         val_data, sampler=sampler_val,
         batch_size=2,
-        num_workers=16,
+        num_workers=4,
         pin_memory=True,
         drop_last=False,
         collate_fn=partial(mmcv_collate, samples_per_gpu=2),
@@ -511,7 +511,7 @@ def build_dataloader(logger, config):
     test_loader = DataLoader(
         test_data, sampler=sampler_test,
         batch_size=1,
-        num_workers=8,
+        num_workers=4,
         pin_memory=True,
         drop_last=False,
         collate_fn=partial(mmcv_collate, samples_per_gpu=2),
@@ -537,7 +537,7 @@ def build_dataloader(logger, config):
     train_loader_test = DataLoader(
         train_data_test, sampler=train_sampler_test,
         batch_size=1,
-        num_workers=16,
+        num_workers=4,
         pin_memory=True,
         drop_last=False,
         collate_fn=partial(mmcv_collate, samples_per_gpu=2),

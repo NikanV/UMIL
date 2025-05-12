@@ -56,8 +56,6 @@ def parse_option():
     parser.add_argument("--local-rank", type=int, default=-1, help='local rank for DistributedDataParallel')
     parser.add_argument('--w-smooth', default=0.01, type=float, help='weight of smooth loss')
     parser.add_argument('--w-sparse', default=0.001, type=float, help='weight of sparse loss')
-    # attack parameters
-    parser.add_argument('--eps', default=128/255, type=float, help='epsilon')
     
     args = parser.parse_args()
 
@@ -65,8 +63,8 @@ def parse_option():
 
     return args, config
 
-def main(config, eps):
-    train_data, val_data, test_data, train_loader, val_loader, test_loader, train_loader_test, _ = build_dataloader(logger, config)
+def main(config):
+    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                             device="cpu", jit=False, 
                             T=config.DATA.NUM_FRAMES,
@@ -85,15 +83,17 @@ def main(config, eps):
     
     if config.TEST.ONLY_TEST:
         model.eval()
-        scores_dict = gen_labels(train_loader_test, text_labels, model, config)
+        scores_dict = gen_labels(val_loader_train, text_labels, model, config)
         return
     
     gt = None
-    with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
-        # gt = json.load(json_data)
-        gt = mmcv.load(json_data, file_format='json')
-        json_data.close()
-    vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
+    vid2key = None
+    
+    if config.ADV_TRAIN.PSEUDO_LABEL:
+        with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
+            gt = mmcv.load(json_data, file_format='json')
+            json_data.close()
+        vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
     
     start_epoch, best_epoch, max_auc = 0, 0, 0.0
     
@@ -113,6 +113,7 @@ def main(config, eps):
     for name, parameter in model.named_parameters():
         parameter.requires_grad_()
     
+    eps = config.ADV_TRAIN.EPS / 255.0
     for epoch in range(start_epoch, config.TRAIN.EPOCHS):
         train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, gt, eps)
         
@@ -150,17 +151,21 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
         original_images = images.clone().detach()
         
         adv_labels = []
-        if int(label_id[0]) == 0:
-            adv_labels = [0] * n_clips
+        if config.ADV_TRAIN.PSEUDO_LABEL:
+            if int(label_id[0]) == 0:
+                adv_labels = [0] * n_clips
+            elif 'pa_labels' in batch_data:
+                adv_labels = list(batch_data['pa_labels'][0][0])
+            else:
+                adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
         else:
-            adv_labels = gt['prd'][str(int(batch_data['vid'][0]))]
-        
+            adv_labels = label_id
+            
         adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
         # save_image(original_images[0][0], "original")
         # save_image(adv_images[0][0], "adv")
         
         output = model(adv_images, texts)
-        # mil loss on max scores among bags, view instance of max scores as labeled data
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug,)
 
         scores = F.softmax(logits, dim=-1)
@@ -175,9 +180,17 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
         labels_binary = label_id > 0
 
         # MIL loss
-        loss_mil = F.cross_entropy(logits_video, labels_binary.long(), reduction='none')
-        loss_mil = loss_mil * max_prob_video
-        loss_mil = loss_mil.mean()
+        loss_mil = None
+        if config.ADV_TRAIN.LOSS == 'mil':
+            loss_mil = F.cross_entropy(logits_video, labels_binary.long(), reduction='none')
+            loss_mil = loss_mil * max_prob_video
+            loss_mil = loss_mil.mean()
+        elif config.ADV_TRAIN.LOSS == 'ce':
+            clip_labels = torch.tensor(adv_labels).cuda().long() # 16
+            clip_labels = clip_labels.unsqueeze(0).repeat(logits.size(0), 1).reshape(-1) # 16
+            clip_logits = logits.reshape(-1, 2) # 16, 2
+            loss_mil = F.cross_entropy(clip_logits, clip_labels, reduction='none')
+            loss_mil = loss_mil.mean()
 
         scores_all = scores
         smoothed_scores = (scores_all[:,1:,1] - scores_all[:,:-1,1])
@@ -188,7 +201,10 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
         w_smooth = args.w_smooth
         w_sparse = args.w_sparse
 
-        total_loss = loss_mil + smoothed_loss * w_smooth + sparsity_loss * w_sparse
+        if config.ADV_TRAIN.LOSS == 'mil':
+            total_loss = loss_mil + smoothed_loss * w_smooth + sparsity_loss * w_sparse
+        elif config.ADV_TRAIN.LOSS == 'ce':
+            total_loss = loss_mil + smoothed_loss * w_smooth
 
         total_loss = total_loss / config.TRAIN.ACCUMULATION_STEPS
 
@@ -246,8 +262,6 @@ def get_adv_images(original_images, bz, a_aug, n_clips, model, texts, labels, ep
         # labels_binary = (label_id > 0).float().expand(logits.shape)
         labels_binary = torch.tensor(labels).cuda().float()
         
-        # logger.info(f"Size of labels: {labels_binary.shape}")
-
         coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
         cost = torch.dot(coef, logits)
         
@@ -298,7 +312,7 @@ def gen_labels(data_loader, text_labels, model, config):
                 scores_dict['prd'][v_name].append(np.argmax(scores_np_prd[ind]))
 
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
-        json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=np_encoder)
+        mmcv.dump(scores_dict, fp, file_format='json')
 
     return scores_dict
 
@@ -327,13 +341,6 @@ def get_vid_list(config):
             filename = line_split[0].split('/')[-1]
             vid_list.append(filename)
     return vid_list
-
-def save_image(image, name):
-    image = image.detach().cpu().clamp(0, 1)
-    image = image.permute(1, 2, 0).numpy()
-    path = os.path.join(config.OUTPUT, f"{name}.png")
-    plt.imsave(path, image)
-    logger.info(f"Saved image to {path}")
 
 def count_parameters(model):
     table = PrettyTable(["Modules", "Parameters"])
@@ -382,4 +389,4 @@ if __name__ == '__main__':
         logger.info(config)
         shutil.copy(args.config, config.OUTPUT)
 
-    main(config, args.eps)
+    main(config)

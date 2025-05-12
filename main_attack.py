@@ -43,17 +43,15 @@ def parse_option():
     parser.add_argument("--local-rank", type=int, default=-1, help='local rank for DistributedDataParallel')
     parser.add_argument('--w-smooth', default=0.01, type=float, help='weight of smooth loss')
     parser.add_argument('--w-sparse', default=0.001, type=float, help='weight of sparse loss')
-    # attack parameters
-    parser.add_argument('--eps', default=2/255, type=float, help='epsilon')
-
+    
     args = parser.parse_args()
 
     config = get_config(args)
 
     return args, config
 
-def main(config, eps, num_attack_steps=10):
-    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, _ = build_dataloader(logger, config)
+def main(config, num_attack_steps=10):
+    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                             device="cpu", jit=False, 
                             T=config.DATA.NUM_FRAMES,
@@ -67,6 +65,7 @@ def main(config, eps, num_attack_steps=10):
     
     logger.info(f"Model loaded from {model_path}")
     
+    eps = config.ADV_TRAIN.EPS
     step_size = 2.5 * (eps / num_attack_steps)
     chunk_size = 16
     
@@ -84,17 +83,17 @@ def main(config, eps, num_attack_steps=10):
     curr_vid = -1
     vid_gt = None
     for idx, batch_data in tqdm(enumerate(test_loader), total=len(test_loader)):
-        if int(batch_data['vid'][0]) != curr_vid:
-            curr_vid = int(batch_data['vid'][0])
-            vid_gt = gt[vid2key[curr_vid]]
-        
         images = batch_data["imgs"].cuda()
         b, n, c, t, h, w = images.size()
-        labels = vid_gt[:t]
-        vid_gt = vid_gt[t:]
         
-        # label_id = batch_data["label"].cuda()
-        # label_id = label_id.reshape(-1)        
+        labels = []
+        for b_idx in range(b):
+            if int(batch_data['vid'][b_idx]) != curr_vid:
+                curr_vid = int(batch_data['vid'][b_idx])
+                vid_gt = gt[vid2key[curr_vid]]
+                
+            labels.append(max(vid_gt[:t * config.DATA.FRAME_INTERVAL:config.DATA.FRAME_INTERVAL]))
+            vid_gt = vid_gt[t * config.DATA.FRAME_INTERVAL:]
         
         images = rearrange(images, 'b n c t h w -> (b n) t c h w')
             
@@ -111,13 +110,12 @@ def main(config, eps, num_attack_steps=10):
             outputs = model(adv_images, texts)
             scores = F.softmax(outputs['y'], dim=-1)
             scores = rearrange(scores, '(b n) c -> b n c', b=b)
-            logits = scores[0, :, 1]
+            logits = scores[:, :, 1].reshape(-1)
             
             # logger.info(f"Size of scores: {scores.shape}, {scores}")
             # logger.info(f"Size of logits: {logits.shape}, {logits}")
             
-            # labels_binary = (label_id > 0).float()
-            labels_binary = torch.tensor(max(labels)).reshape(1).cuda().float()
+            labels_binary = torch.tensor(labels).cuda().float()
             
             coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
             cost = torch.dot(coef, logits)
@@ -231,4 +229,4 @@ if __name__ == '__main__':
         logger.info(config)
         shutil.copy(args.config, config.OUTPUT)
 
-    main(config, args.eps)
+    main(config)
