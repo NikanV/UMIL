@@ -17,7 +17,6 @@ TRAIN:
     ACCUMULATION_STEPS: 8
     AUTO_RESUME: False
 ADV_TRAIN:
-    PSEUDO_ANOMALY: False
     EPS: 2.0
     LOSS: 'mil'
     PSEUDO_LABEL: False
