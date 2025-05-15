@@ -1,5 +1,5 @@
 DATA:
-    ROOT: '/home/user01/MSAD/MSAD_TEST/'
+    ROOT: '../MSAD/'
     TRAIN_FILE: 'labels/MSAD_train.txt'
     VAL_FILE: 'labels/MSAD_test.txt'
     DATASET: msad
@@ -15,3 +15,5 @@ TRAIN:
     BATCH_SIZE: 1
     BATCH_SIZE_UMIL: 1
     ACCUMULATION_STEPS: 8
+ADV_TRAIN:
+    EPS: 2.0

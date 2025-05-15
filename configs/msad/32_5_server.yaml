@@ -1,5 +1,5 @@
 DATA:
-    ROOT: '/home/user01/MSAD/MSAD_TRAIN/'
+    ROOT: '../MSAD/'
     TRAIN_FILE: 'labels/MSAD_train.txt'
     VAL_FILE: 'labels/MSAD_test.txt'
     DATASET: msad
@@ -11,7 +11,12 @@ DATA:
     FILENAME_TMPL: 'frame_{:04}.jpg'
 MODEL:
     ARCH: ViT-B/32
+    FIX_TEXT: True
 TRAIN:
     BATCH_SIZE: 1
     BATCH_SIZE_UMIL: 1
     ACCUMULATION_STEPS: 8
+    AUTO_RESUME: False
+ADV_TRAIN:
+    PSEUDO_ANOMALY: False
+

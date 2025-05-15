@@ -1,0 +1,19 @@
+DATA:
+    ROOT: '../SHANGHAI/'
+    TRAIN_FILE: 'labels/SHANGHAI_train.txt'
+    VAL_FILE: 'labels/SHANGHAI_test.txt'
+    DATASET: shanghai
+    NUM_CLIPS: 16
+    NUM_FRAMES: 5
+    FRAME_INTERVAL: 6
+    NUM_CLASSES: 2
+    LABEL_LIST: 'labels/shanghai_2_labels.csv'
+    FILENAME_TMPL: '{:04}.jpg'
+MODEL:
+    ARCH: ViT-B/32
+TRAIN:
+    BATCH_SIZE: 1
+    BATCH_SIZE_UMIL: 1
+    ACCUMULATION_STEPS: 8
+ADV_TRAIN:
+    EPS: 2.0
