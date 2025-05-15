@@ -441,7 +441,7 @@ def build_dataloader(logger, config):
         
     train_data = FrameDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
                               filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.AUG.PSEUDO_ANOMALY)
+                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.ADV_TRAIN.PSEUDO_ANOMALY)
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     sampler_train = torch.utils.data.DistributedSampler(
