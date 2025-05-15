@@ -27,16 +27,6 @@ import pandas as pd
 import json
 from prettytable import PrettyTable
 
-class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super(NpEncoder, self).default(obj)
-
 def parse_option():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', '-cfg', required=True, type=str, default='configs/k400/32_8.yaml')
@@ -83,7 +73,7 @@ def main(config):
     
     if config.TEST.ONLY_TEST:
         model.eval()
-        scores_dict = gen_labels(val_loader_train, text_labels, model, config)
+        scores_dict = gen_labels(train_loader, text_labels, model, config)
         return
     
     gt = None
@@ -293,28 +283,27 @@ def gen_labels(data_loader, text_labels, model, config):
         scores_dict = dict()
         scores_dict['prd'] = dict()
         for idx, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
-            _image = batch_data["imgs"].cuda()
-            label_id = batch_data["label"].cuda()
-            label_id = label_id.reshape(-1)
+            _image = batch_data["imgs"][:,0].cuda()
             b, n, c, t, h, w = _image.size()
             _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
             output = model(_image, text_inputs)
 
             scores_prd = F.softmax(output['y'], dim=-1)
             scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)
-            scores_np_prd = scores_prd.cpu().data.numpy()
-
-            v_name = "01_Accident_001.mp4"
-            for ind in range(scores_np_prd.shape[0]):                    
-                v_name = vid_list[batch_data["vid"][ind]]
+            scores_np_prd = scores_prd.cpu().data.numpy() # b, 16, 2
+            
+            v_name = None
+            for b_ind in range(b):
+                v_name = int(batch_data["vid"][b_ind])
                 if v_name not in scores_dict['prd']:
                     scores_dict['prd'][v_name] = []
-                scores_dict['prd'][v_name].append(np.argmax(scores_np_prd[ind]))
+                pseudo_labels = np.argmax(scores_np_prd[b_ind], axis=1)
+                
+                for p_l in pseudo_labels:
+                    scores_dict['prd'][v_name].append(p_l)
 
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
         mmcv.dump(scores_dict, fp, file_format='json')
-
-    return scores_dict
 
 def get_gt(config):
     GT = []

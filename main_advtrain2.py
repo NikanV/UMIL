@@ -28,16 +28,6 @@ import pandas as pd
 import json
 from prettytable import PrettyTable
 
-class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super(NpEncoder, self).default(obj)
-
 def parse_option():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', '-cfg', required=True, type=str, default='configs/k400/32_8.yaml')
@@ -656,7 +646,6 @@ def gen_labels(data_loader, text_labels, model, config):
                     scores_dict['prd'][v_name].append(p_l)
 
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
-        # json.dump(scores_dict, fp, sort_keys=True, indent=2, cls=NpEncoder)
         mmcv.dump(scores_dict, fp, file_format='json')
 
     return scores_dict
