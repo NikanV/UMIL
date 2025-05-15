@@ -253,8 +253,8 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         
         results['pa_labels'] = torch.zeros(a, k)
         selected_clips = list(range(aug_offset, aug_offset + aug_length)) 
-        results['imgs'][0, selected_clips] = self.anomaly_transform(results['imgs'][0, selected_clips].permute(0, 2, 1, 3, 4), vid_name, selected_clips[0]).permute(0, 2, 1, 3, 4)
-        results['imgs'][1, selected_clips] = self.anomaly_transform(results['imgs'][1, selected_clips].permute(0, 2, 1, 3, 4), vid_name, selected_clips[0]).permute(0, 2, 1, 3, 4)
+        results['imgs'][0, selected_clips] = self.anomaly_transform(results['imgs'][0, selected_clips].permute(0, 2, 1, 3, 4)).permute(0, 2, 1, 3, 4)
+        results['imgs'][1, selected_clips] = self.anomaly_transform(results['imgs'][1, selected_clips].permute(0, 2, 1, 3, 4)).permute(0, 2, 1, 3, 4)
         results['pa_labels'][0, selected_clips] = 1
         results['pa_labels'][1, selected_clips] = 1
         
