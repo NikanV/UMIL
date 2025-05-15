@@ -190,7 +190,7 @@ class AnomalyGenerator(object):
         imgs: tensor [T, C, H, W], float in [0,1]
         returns: tensor [T, C, H, W], float in [0,1]
         """
-        T, C, H, W = imgs.shape
+        K, T, C, H, W = imgs.shape
         # random movement vector
         angle = self.random.uniform(0, 2 * np.pi)
         speed = self.random.uniform(self.min_speed, self.max_speed)
@@ -211,7 +211,7 @@ class AnomalyGenerator(object):
         y0 = np.clip(cy - ph // 2 + jitter_y, 0, H - ph)
 
         # extract patch from first frame
-        frame0 = imgs[0].cpu().numpy().transpose(1, 2, 0)
+        frame0 = imgs[0, 0].cpu().numpy().transpose(1, 2, 0)
         pil0 = transforms.ToPILImage()(frame0)
         patch = pil0.crop((x0, y0, x0 + pw, y0 + ph))
         patch = self.augmentor(patch)
@@ -220,16 +220,19 @@ class AnomalyGenerator(object):
         patch_rgb = np.array(patch.convert('RGB'))
 
         outputs = []
-        for t in range(T):
-            xi = int(np.clip(x0 + dx * t, 0, W - pw))
-            yi = int(np.clip(y0 + dy * t, 0, H - ph))
+        for k in range(K):
+            clip_out = []
+            for t in range(T):
+                xi = int(np.clip(x0 + dx * (k * T + t), 0, W - pw))
+                yi = int(np.clip(y0 + dy * (k * T + t), 0, H - ph))
 
-            frame = imgs[t].cpu().numpy().transpose(1, 2, 0)
-            pil_frame = transforms.ToPILImage()(frame).convert('RGBA')
-            pil_frame.paste(Image.fromarray(patch_rgb), (xi, yi), mask=Image.fromarray(alpha))
+                frame = imgs[k, t].cpu().numpy().transpose(1, 2, 0)
+                pil_frame = transforms.ToPILImage()(frame).convert('RGBA')
+                pil_frame.paste(Image.fromarray(patch_rgb), (xi, yi), mask=Image.fromarray(alpha))
 
-            out_np = np.array(pil_frame.convert('RGB'))
-            out_tensor = transforms.ToTensor()(out_np)
-            outputs.append(out_tensor)
+                out_np = np.array(pil_frame.convert('RGB'))
+                out_tensor = transforms.ToTensor()(out_np)
+                clip_out.append(out_tensor)
+            outputs.append(torch.stack(clip_out))
 
         return torch.stack(outputs)

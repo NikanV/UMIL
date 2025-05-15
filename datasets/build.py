@@ -127,7 +127,7 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         self.dynamic_length = dynamic_length
         
         self.pseudo_anomaly = pseudo_anomaly
-        self.anomaly_transform = AnomalyGenerator()
+        self.anomaly_transform = AnomalyGenerator(seed=42)
 
         assert not (self.multi_class and self.sample_by_class)
 
@@ -193,6 +193,7 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
     def prepare_train_frames(self, idx):
         """Prepare the frames for training given the index."""
         results = copy.deepcopy(self.video_infos[idx])
+        vid_name = results['vid_name'] if 'vid_name' in results else ''
         results['modality'] = self.modality
         results['start_index'] = self.start_index
         results['filename_tmpl'] = self.filename_tmpl
@@ -211,11 +212,11 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
                    "label": aug1['label'].repeat(2),
                    "vid": aug1['vid'],
                    'frame_inds': aug1['frame_inds'],
-                   'total_frames': aug1['total_frames'],
+                   'total_frames': aug1['total_frames']
                        }
-            return ret
+            return ret, vid_name
         else:
-            return aug1
+            return aug1, vid_name
 
     def prepare_test_frames(self, idx):
         """Prepare the frames for testing given the index."""
@@ -241,9 +242,9 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         if self.test_mode:
             return self.prepare_test_frames(idx)
 
-        results = self.prepare_train_frames(idx)
+        results, vid_name = self.prepare_train_frames(idx)
         
-        if results['vid'] == 1 or not self.pseudo_anomaly or np.random.rand(1)[0] >= 0.5:
+        if vid_name == '' or results['label'][0] > 0  or not self.pseudo_anomaly or np.random.rand(1)[0] >= 0.5:
             return results
         
         a, k, c, t, h, w = results['imgs'].shape # 2, 16, 3, 5, 224, 244
@@ -251,11 +252,11 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         aug_length = np.random.randint(1, t - aug_offset + 1)
         
         results['pa_labels'] = torch.zeros(a, k)
-        for i in range(aug_offset, aug_offset + aug_length):
-            results['imgs'][0, i] = self.anomaly_transform(results['imgs'][0, i].permute(1, 0, 2, 3)).permute(1, 0, 2, 3)
-            results['imgs'][1, i] = self.anomaly_transform(results['imgs'][1, i].permute(1, 0, 2, 3)).permute(1, 0, 2, 3)
-            results['pa_labels'][0, i] = 1
-            results['pa_labels'][1, i] = 1
+        selected_clips = list(range(aug_offset, aug_offset + aug_length)) 
+        results['imgs'][0, selected_clips] = self.anomaly_transform(results['imgs'][0, selected_clips].permute(0, 2, 1, 3, 4), vid_name, selected_clips[0]).permute(0, 2, 1, 3, 4)
+        results['imgs'][1, selected_clips] = self.anomaly_transform(results['imgs'][1, selected_clips].permute(0, 2, 1, 3, 4), vid_name, selected_clips[0]).permute(0, 2, 1, 3, 4)
+        results['pa_labels'][0, selected_clips] = 1
+        results['pa_labels'][1, selected_clips] = 1
         
         return results
 
@@ -295,7 +296,7 @@ class FrameDataset(BaseDataset):
                     label = int(label)
                 if self.data_prefix is not None and self.data_prefix not in filename:
                     filename = osp.join(self.data_prefix, filename)
-                video_infos.append(dict(frame_dir=filename, label=label, total_frames=int(end)-int(start), tar=self.use_tar_format, vid=vid))
+                video_infos.append(dict(frame_dir=filename, label=label, total_frames=int(end)-int(start), tar=self.use_tar_format, vid=vid, vid_name=filename.split('/')[-1]))
                 vid += 1
         return video_infos
 
@@ -440,7 +441,7 @@ def build_dataloader(logger, config):
         
     train_data = FrameDataset(ann_file=config.DATA.TRAIN_FILE, data_prefix=config.DATA.ROOT,
                               filename_tmpl=config.DATA.FILENAME_TMPL, labels_file=config.DATA.LABEL_LIST,
-                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.ADV_TRAIN.PSEUDO_ANOMALY)
+                              pipeline=train_pipeline, pipeline_=train_pipeline_S, pseudo_anomaly=config.AUG.PSEUDO_ANOMALY)
     num_tasks = dist.get_world_size()
     global_rank = dist.get_rank()
     sampler_train = torch.utils.data.DistributedSampler(
@@ -485,7 +486,7 @@ def build_dataloader(logger, config):
     sampler_val = torch.utils.data.SequentialSampler(val_data)
     val_loader = DataLoader(
         val_data, sampler=sampler_val,
-        batch_size=2,
+        batch_size=1,
         num_workers=4,
         pin_memory=True,
         drop_last=False,
