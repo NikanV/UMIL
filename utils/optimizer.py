@@ -74,16 +74,10 @@ def build_optimizer(config, model):
           weight_decay=config.TRAIN.WEIGHT_DECAY, lr=config.TRAIN.LR*0.1,
           have=("anomaly_head",), not_have=()
           )
-    cluster_parameters = set_weight_decay(model, skip, skip_keywords,
-          weight_decay=config.TRAIN.WEIGHT_DECAY, lr=config.TRAIN.LR,
-          have=("cluster_head",), not_have=()
-          )
 
     optimizer = optim.AdamW(clip_parameters + mit_parameters + prompts_parameters + msg_parameters + anomaly_parameters,
                         betas=(0.9, 0.98), eps=1e-8,)
-    optimizer_umil = optim.AdamW(cluster_parameters + anomaly_parameters,
-                            betas=(0.9, 0.98), eps=1e-8,)
-    return optimizer, optimizer_umil
+    return optimizer
 
 
 def build_scheduler(config, optimizer, n_iter_per_epoch):

@@ -8,25 +8,12 @@ from sklearn.metrics import roc_auc_score, roc_curve
 import scipy.signal as signal
 from matplotlib import pyplot as plt
 
-def match(scores1, scores2):
-    #score shape: T,2
-    score1 = scores1[:, 1]
-    score2 = scores2[:, 1]
-    iou = np.stack((score1,score2),axis=1).min(1).sum()
-    iou_ = np.stack((score1,1-score2),axis=1).min(1).sum()
-
-    if iou > iou_:
-        return score2
-    else:
-        return 1-score2
-
 def evaluate_result(vid2abnormality, anno_file, root=''):
     LABEL_PATH = anno_file
     gt = []
     ans = []
     GT = []
     ANS = []
-    video_path_list = []
     videos = {}
     for video in open(LABEL_PATH):
         vid = video.strip().split(' ')[0].split('/')[-1]
@@ -130,7 +117,7 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def epoch_saving(config, epoch, model, max_accuracy, optimizer, lr_scheduler, optimizer_u, lr_scheduler_u, logger, working_dir, is_best):
+def epoch_saving(config, epoch, model, max_accuracy, optimizer, lr_scheduler, logger, working_dir, is_best):
     save_state = {'model': model.state_dict(),
                   'optimizer': optimizer.state_dict(),
                   'lr_scheduler': lr_scheduler.state_dict(),

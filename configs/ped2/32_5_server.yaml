@@ -11,12 +11,11 @@ DATA:
     FILENAME_TMPL: '{:03}.tif'
 MODEL:
     ARCH: ViT-B/32
+    FIX_TEXT: True
 TRAIN:
     BATCH_SIZE: 1
     ACCUMULATION_STEPS: 8
     AUTO_RESUME: False
 ADV_TRAIN:
-    EPS: 0.5
-    LOSS: 'ce'
-    PSEUDO_LABEL: True
-    PSEUDO_ANOMALY: True
+    PSEUDO_ANOMALY: False
+

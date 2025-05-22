@@ -10,8 +10,8 @@ from scipy.ndimage import gaussian_filter
 from scipy.ndimage import gaussian_filter, map_coordinates
 import torch
 import numpy as np
-from scipy.ndimage import gaussian_filter, label
-import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
+import os
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False)
@@ -19,7 +19,7 @@ img_norm_cfg = dict(
 class RandomAugmentations:
     def __init__(self, seed=None):
         self.seed = seed
-        # self.set_seed(seed)
+        self.set_seed(seed)
 
         self.color_transform_light = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
         self.color_transform_medium = transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.2)
@@ -169,15 +169,14 @@ class AnomalyGenerator(object):
         self.max_speed = 35
 
         self.augmentor = transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)
+        self.gradcam_root = 'gradcam/'
     
     def generate_blob_mask(self, height, width, sigma=14, threshold=0.5, device='cpu'):
-        # create smooth random noise and threshold to single largest connected region
         rnd = torch.rand((height, width)).numpy()
         sm = cv2.GaussianBlur(rnd, (0, 0), sigmaX=sigma, sigmaY=sigma)
         binary = (sm > threshold).astype(np.uint8)
         num_labels, labels = cv2.connectedComponents(binary)
         if num_labels > 1:
-            # pick largest blob (skip background label=0)
             sizes = [(labels == i).sum() for i in range(1, num_labels)]
             largest = np.argmax(sizes) + 1
             mask = (labels == largest).astype(np.uint8)
@@ -185,11 +184,86 @@ class AnomalyGenerator(object):
             mask = np.zeros((height, width), dtype=np.uint8)
         return mask
     
-    def __call__(self, imgs):
-        """
-        imgs: tensor [T, C, H, W], float in [0,1]
-        returns: tensor [T, C, H, W], float in [0,1]
-        """
+    def load_gradcam_mask(self, vid_name, frame_idx, shape, thresh=0.5):
+        path = os.path.join(self.gradcam_root, vid_name, f"{frame_idx}.jpg")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"GradCAM mask not found at {path}")
+
+        # read BGR color image
+        cam_bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+        # resize to match frame size
+        cam_bgr = cv2.resize(cam_bgr, (shape[1], shape[0]))
+        # extract the blue channel (index 0 in BGR)
+        blue = cam_bgr[:, :, 0].astype(np.float32) / 255.0
+        # threshold to binary mask
+        mask = (blue > thresh).astype(np.uint8)
+        return mask
+    
+    def with_gradcam(self, imgs, video_name, start_clip):
+        K, T, C, H, W = imgs.shape
+
+        angle = self.random.uniform(0, 2 * np.pi)
+        speed = self.random.uniform(self.min_speed, self.max_speed)
+        dx, dy = speed * np.cos(angle), speed * np.sin(angle)
+
+        mask = self.load_gradcam_mask(video_name, frame_idx=start_clip, shape=(H, W))
+
+        num_labels, labels = cv2.connectedComponents(mask)
+        if num_labels <= 1:
+            return imgs  # nothing detected → no anomaly
+
+        largest_blob = np.argmax(
+            [(labels == i).sum() for i in range(1, num_labels)]
+        ) + 1
+        blob_mask = (labels == largest_blob).astype(np.uint8)
+
+        x0, y0, w, h = cv2.boundingRect(blob_mask)
+
+        max_pw = min(w, W // 4)
+        max_ph = min(h, H // 4)
+        pw = self.random.randint(max_pw // 2, max_pw) or 1
+        ph = self.random.randint(max_ph // 2, max_ph) or 1
+
+        # try a few times to ensure patch overlaps blob
+        for _ in range(10):
+            xi0 = self.random.randint(x0, x0 + w - pw)
+            yi0 = self.random.randint(y0, y0 + h - ph)
+            region = blob_mask[yi0:yi0+ph, xi0:xi0+pw]
+            if region.mean() >= 0.5:
+                break
+        else:
+            # fallback: use whole blob
+            xi0, yi0, pw, ph = x0, y0, w, h
+
+        frame0 = imgs[0, 0].cpu().numpy().transpose(1, 2, 0)
+        pil0 = transforms.ToPILImage()(frame0)
+        patch = pil0.crop((xi0, yi0, xi0 + pw, yi0 + ph))
+        patch = self.augmentor(patch).convert("RGBA")
+        alpha = np.array(patch.split()[-1])
+        patch_rgb = np.array(patch.convert("RGB"))
+        outputs = []
+        for k in range(K):
+            clip_out = []
+            for t in range(T):
+                xi = int(np.clip(xi0 + dx * (k * T + t), 0, W - pw))
+                yi = int(np.clip(yi0 + dy * (k * T + t), 0, H - ph))
+
+                frame = imgs[k, t].cpu().numpy().transpose(1, 2, 0)
+                pil_frame = transforms.ToPILImage()(frame).convert("RGBA")
+                pil_frame.paste(
+                    Image.fromarray(patch_rgb),
+                    (xi, yi),
+                    mask=Image.fromarray(alpha)
+                )
+
+                out_np = np.array(pil_frame.convert("RGB"))
+                out_tensor = transforms.ToTensor()(out_np)
+                clip_out.append(out_tensor)
+            outputs.append(torch.stack(clip_out))  # (T, C, H, W)
+
+        return torch.stack(outputs)  # (K, T, C, H, W)
+    
+    def no_gradcam(self, imgs):
         K, T, C, H, W = imgs.shape
         # random movement vector
         angle = self.random.uniform(0, 2 * np.pi)
@@ -236,3 +310,9 @@ class AnomalyGenerator(object):
             outputs.append(torch.stack(clip_out))
 
         return torch.stack(outputs)
+    
+    def __call__(self, imgs, gradcam=False, video_name=None, start_clip=None):
+        if gradcam:
+            return self.with_gradcam(imgs, video_name, start_clip)
+        else:
+            return self.no_gradcam(imgs)

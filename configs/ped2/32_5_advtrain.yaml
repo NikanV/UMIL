@@ -1,5 +1,5 @@
 DATA:
-    ROOT: '/kaggle/input/traffic-anomaly-dataset/TAD/'
+    ROOT: '../TAD/'
     TRAIN_FILE: 'labels/TAD_train.txt'
     VAL_FILE: 'labels/TAD_test.txt'
     DATASET: traffic
@@ -14,8 +14,9 @@ MODEL:
 TRAIN:
     BATCH_SIZE: 1
     ACCUMULATION_STEPS: 8
+    AUTO_RESUME: False
 ADV_TRAIN:
-    EPS: 2.0
-    LOSS: 'mil'
-    PSEUDO_LABEL: False
-    PSEUDO_ANOMALY: False
+    EPS: 0.5
+    LOSS: 'ce'
+    PSEUDO_LABEL: True
+    PSEUDO_ANOMALY: True

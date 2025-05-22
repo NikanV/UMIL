@@ -1,6 +1,5 @@
 import os
 import torch
-import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import argparse
@@ -16,7 +15,6 @@ import time
 import numpy as np
 import random
 import mmcv
-# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
@@ -24,7 +22,7 @@ import torch.nn.functional as F
 
 def parse_option():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-cfg', required=True, type=str, default='configs/k400/32_8.yaml')
+    parser.add_argument('--config', '-cfg', required=True, type=str)
     parser.add_argument(
         "--opts",
         help="Modify config options by adding 'KEY VALUE' pairs. ",
@@ -50,7 +48,7 @@ def parse_option():
 
 
 def main(config):
-    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train,_ = build_dataloader(logger, config)
+    train_data, _, _, train_loader, _, test_loader, _ = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                          device="cpu", jit=False, 
                          T=config.DATA.NUM_FRAMES,
@@ -60,14 +58,12 @@ def main(config):
                          logger=logger,
                         )
     model = model.cuda()
-    logger.info(f"Model saved to {model_path}")
+    logger.info(f"Model loaded from {model_path}")
 
-    optimizer, _ = build_optimizer(config, model)
+    optimizer = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
     
-    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=False)
-
-    start_epoch, best_epoch, max_auc = 0, 0, 0.0
+    start_epoch, max_auc = 0, 0.0
 
     if config.TRAIN.AUTO_RESUME:
         resume_file = auto_resume_helper(config.OUTPUT)
@@ -86,11 +82,11 @@ def main(config):
     
     if config.TEST.ONLY_TEST:
         if not os.path.isdir(model_path):
-            #evaluate on val set
+            # evaluate on val set
             if "kaggle" in model_path:
-                out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
+                out_path = os.path.join("/kaggle/working/outputs", model_path.replace('pth','pkl').split('/')[-1])
             else:
-                out_path = os.path.join(config.OUTPUT, model_path.replace('pth','pkl').replace('pt','pkl').split('/')[-1])
+                out_path = os.path.join(config.OUTPUT, model_path.replace('pth','pkl').split('/')[-1])
             if os.path.exists(out_path):
                 scores_dict = mmcv.load(out_path)
             else:
@@ -107,7 +103,6 @@ def main(config):
                     tmp_dict[v_name] = [p_scores[:, 0, 1]]
 
             auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-
             logger.info(f"AUC@all/ano of version {out_path.split('/')[-2]} on epoch {out_path.split('/')[-1].split('_')[-1][:-4]} : {auc_all:.4f}({auc_ano:.4f})")
             return
 
@@ -116,7 +111,7 @@ def main(config):
         train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config)
 
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            out_path = os.path.join(config.OUTPUT, f"mil_epoch_{epoch}.pkl")
+            out_path = os.path.join(config.OUTPUT, f"X-ClipMIL_epoch_{epoch}.pkl")
             scores_dict = validate(test_loader, text_labels, model, config, out_path)
             
             tmp_dict = {}
@@ -133,11 +128,10 @@ def main(config):
             max_auc = max(max_auc, auc_all)
             logger.info(f"Auc of MIL on epoch {epoch}: {auc_all:.4f}({auc_ano:.4f})")
             logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
-            epoch_saving(config, epoch, model, max_auc, optimizer, _, lr_scheduler, _, logger, config.OUTPUT, is_best)
+            epoch_saving(config, epoch, model, max_auc, optimizer, lr_scheduler, logger, config.OUTPUT, is_best)
 
-def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, data_dict=None):
+def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config):
     model.train()
-
     optimizer.zero_grad()
     
     num_steps = len(train_loader)
@@ -158,9 +152,8 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
         label_id = label_id.reshape(-1)
         bz = images.shape[0]
         a_aug = images.shape[1]
-        n_clips = images.shape[2]
 
-        images = rearrange(images, 'b a k c t h w -> (b a k) t c h w')# bz*num_aug*num_clips,num_frames,h,w
+        images = rearrange(images, 'b a k c t h w -> (b a k) t c h w') # bz*num_aug*num_clips,num_frames,h,w
 
         if texts.shape[0] == 1:
             texts = texts.view(1, -1)
@@ -171,9 +164,7 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
 
         scores = F.softmax(logits, dim=-1)
         scores_ano = scores[:,:,1]
-        scores_nor = scores[:,:,0]
-        max_prob_ano, max_ind = torch.max(scores_ano, dim=-1)
-        max_prob_nor, _ = torch.max(scores_nor, dim=-1)
+        _, max_ind = torch.max(scores_ano, dim=-1)
 
         logits_video = torch.gather(logits, 1, max_ind[:, None, None].repeat((1, 1, 2))).squeeze(1)
         max_prob_video, _ = torch.max(torch.gather(scores, 1, max_ind[:, None, None].repeat((1, 1, 2))).squeeze(1),
@@ -276,6 +267,7 @@ def validate(data_loader, text_labels, model, config, out_path):
                 logger.info(
                     f'Test: [{idx}/{len(data_loader)}]\t'
                 )
+                
     tmp_dict = {}
     for v_name in scores_dict["prd"].keys():
         p_scores = np.array(scores_dict["prd"][v_name]).copy()
@@ -287,10 +279,7 @@ def validate(data_loader, text_labels, model, config, out_path):
             tmp_dict[v_name] = [p_scores[:, 0, 1]]
 
     auc_all_p, auc_ano_p = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-
-    logger.info(
-        f'AUC: [{auc_all_p:.3f}/{auc_ano_p:.3f}]\t'
-    )
+    logger.info(f'AUC: [{auc_all_p:.3f}/{auc_ano_p:.3f}]\t')
     logger.info(f'writing results to {out_path}')
     mmcv.dump(scores_dict, out_path)
     return scores_dict

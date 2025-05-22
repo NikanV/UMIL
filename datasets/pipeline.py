@@ -1,7 +1,6 @@
 import io
 import os
 import os.path as osp
-import shutil
 import warnings
 from collections.abc import Sequence
 from mmcv.utils import Registry, build_from_cfg
@@ -10,8 +9,6 @@ from torch.utils.data import Dataset
 import copy
 import os.path as osp
 import warnings
-from abc import ABCMeta, abstractmethod
-from collections import OrderedDict, defaultdict
 import os.path as osp
 import mmcv
 import numpy as np
@@ -1332,8 +1329,6 @@ class Normalize:
             for i, img in enumerate(results['imgs']):
                 imgs[i] = img
 
-            # for img in imgs:
-            #     mmcv.imnormalize_(img, self.mean, self.std, self.to_bgr)
             for i in range(len(imgs)):
                 imgs[i] /= 255.0
             results['imgs'] = imgs
@@ -2107,6 +2102,7 @@ class RawFrameDecode:
 
         offset = results.get('offset', 0)
         # import pdb;pdb.set_trace()
+        # In case frames' indices were bad
         # all_files = sorted(
         #     [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))],
         #     key=lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else x
@@ -2116,11 +2112,12 @@ class RawFrameDecode:
             if modality == 'RGB':
                 if 'start' in results:
                     filepath = osp.join(directory, filename_tmpl.format(frame_idx+results['start']))
+                    # In case frames' indices were bad
                     # filepath = os.path.join(directory, all_files[frame_idx + results['start']])
                 else:
                     filepath = osp.join(directory, filename_tmpl.format(frame_idx))
+                    # In case frames' indices were bad
                     # filepath = os.path.join(directory, all_files[frame_idx])
-                # print(results['frame_inds'],filepath)
                 img_bytes = self.file_client.get(filepath)
                 # Get frame with channel order RGB directly.
                 cur_frame = mmcv.imfrombytes(img_bytes, channel_order='rgb')

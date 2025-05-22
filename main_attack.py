@@ -1,22 +1,16 @@
 import os
 import torch
-import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import argparse
-import datetime
 import shutil
 from pathlib import Path
 from utils.config import get_config
-from utils.optimizer import build_optimizer, build_scheduler
-from utils.tools import AverageMeter, generate_text, evaluate_result
+from utils.tools import generate_text, evaluate_result
 from datasets.build import build_dataloader
 from utils.logger import create_logger
-import time
 import numpy as np
 import random
-import mmcv
-# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
@@ -26,7 +20,7 @@ import matplotlib.pyplot as plt
 
 def parse_option():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-cfg', required=True, type=str, default='configs/k400/32_8.yaml')
+    parser.add_argument('--config', '-cfg', required=True, type=str)
     parser.add_argument(
         "--opts",
         help="Modify config options by adding 'KEY VALUE' pairs. ",
@@ -51,7 +45,7 @@ def parse_option():
     return args, config
 
 def main(config, num_attack_steps=10):
-    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
+    train_data, _, _, _, _, test_loader, _ = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                             device="cpu", jit=False, 
                             T=config.DATA.NUM_FRAMES,
@@ -65,9 +59,8 @@ def main(config, num_attack_steps=10):
     
     logger.info(f"Model loaded from {model_path}")
     
-    eps = config.ADV_TRAIN.EPS
+    eps = config.ADV_TRAIN.EPS / 255.0
     step_size = 2.5 * (eps / num_attack_steps)
-    chunk_size = 16
     
     vid_list = get_vid_list(config)
     scores_dict = dict()
@@ -79,10 +72,9 @@ def main(config, num_attack_steps=10):
     gt = get_gt(config)
     vid2key = {vid: key for vid, key in enumerate(gt.keys())}
 
-    final_logits = []
     curr_vid = -1
     vid_gt = None
-    for idx, batch_data in tqdm(enumerate(test_loader), total=len(test_loader)):
+    for _, batch_data in tqdm(enumerate(test_loader), total=len(test_loader)):
         images = batch_data["imgs"].cuda()
         b, n, c, t, h, w = images.size()
         
@@ -96,14 +88,10 @@ def main(config, num_attack_steps=10):
             vid_gt = vid_gt[t * config.DATA.FRAME_INTERVAL:]
         
         images = rearrange(images, 'b n c t h w -> (b n) t c h w')
-            
-        # logger.info(f"Size of batch data: {images.shape}, {label_id}")
-        
+                    
         original_images = images.clone().detach()
         adv_images = images.clone().detach()        
-        
-        # save_image(original_images[0][0], f"original_{idx}")
-        
+                
         for step in range(num_attack_steps):
             adv_images.requires_grad_()
             
@@ -112,26 +100,17 @@ def main(config, num_attack_steps=10):
             scores = rearrange(scores, '(b n) c -> b n c', b=b)
             logits = scores[:, :, 1].reshape(-1)
             
-            # logger.info(f"Size of scores: {scores.shape}, {scores}")
-            # logger.info(f"Size of logits: {logits.shape}, {logits}")
-            
             labels_binary = torch.tensor(labels).cuda().float()
             
             coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
             cost = torch.dot(coef, logits)
-            
-            # logger.info(f"Size of coef: {coef.shape}, {coef}")
-            # logger.info(f"Size of cost: {cost.shape}, {cost}")
-            
             cost.backward()
 
             grad_sign = adv_images.grad.sign()
             adv_images = adv_images.detach() + step_size * grad_sign
             perturbation = torch.clamp(adv_images - original_images, min=-eps, max=eps)
             adv_images = torch.clamp(original_images + perturbation, 0, 1)
-        
-        # save_image(adv_images[0][0], f"adv_{idx}")
-        
+                
         with torch.no_grad():
             final_outputs = model(adv_images, texts)
             
@@ -156,13 +135,9 @@ def main(config, num_attack_steps=10):
             tmp_dict[v_name] = [p_scores[:, 0, 1]]
 
     auc_all_p, auc_ano_p = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
-
-    logger.info(
-        f'AUC: [{auc_all_p:.3f}/{auc_ano_p:.3f}]\t'
-    )
+    logger.info(f'AUC: [{auc_all_p:.3f}/{auc_ano_p:.3f}]\t')
 
 def get_gt(config):
-    GT = []
     videos = {}
     for video in open(config.DATA.VAL_FILE):
         vid = video.strip().split(' ')[0].split('/')[-1]

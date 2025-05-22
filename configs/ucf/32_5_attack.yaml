@@ -8,12 +8,11 @@ DATA:
     FRAME_INTERVAL: 6
     NUM_CLASSES: 2
     LABEL_LIST: 'labels/ucf_2_labels.csv'
-    FILENAME_TMPL: '{:05}.jpg'
+    FILENAME_TMPL: 'frame_{:03}.jpg'
 MODEL:
     ARCH: ViT-B/32
 TRAIN:
     BATCH_SIZE: 1
-    BATCH_SIZE_UMIL: 1
     ACCUMULATION_STEPS: 8
 ADV_TRAIN:
-    EPS: 2.0
+    EPS: 0.5

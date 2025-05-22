@@ -1,30 +1,22 @@
-from logging import Logger
 from torch.utils.data import DataLoader
 import torch.distributed as dist
 import torch
 import numpy as np
 from functools import partial
-import random
-
-import io
-import os
 import os.path as osp
-import shutil
-import warnings
 from collections.abc import Mapping, Sequence
-from mmcv.utils import Registry, build_from_cfg
+from mmcv.utils import Registry
 from torch.utils.data import Dataset
 import copy
 import os.path as osp
 import warnings
 from abc import ABCMeta, abstractmethod
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 import os.path as osp
 import mmcv
 import numpy as np
 import torch
 import math
-import tarfile
 from .pipeline import *
 from torch.utils.data import DataLoader
 from torch.utils.data.dataloader import default_collate
@@ -332,63 +324,6 @@ class RawFramesTestDataset(BaseDataset):
             vid += 1
         return segs
 
-
-class VideoDataset(BaseDataset):
-    def __init__(self, ann_file, pipeline, labels_file, start_index=0, **kwargs):
-        super().__init__(ann_file, pipeline, start_index=start_index, **kwargs)
-        self.labels_file = labels_file
-
-    @property
-    def classes(self):
-        classes_all = pd.read_csv(self.labels_file)
-        return classes_all.values.tolist()
-
-    def load_annotations(self):
-        """Load annotation file to get video information."""
-        if self.ann_file.endswith('.json'):
-            return self.load_json_annotations()
-
-        video_infos = []
-        with open(self.ann_file, 'r') as fin:
-            for line in fin:
-                line_split = line.strip().split()
-                import pdb;
-                pdb.set_trace()
-                if self.multi_class:
-                    assert self.num_classes is not None
-                    filename, label = line_split[0], line_split[1:]
-                    label = list(map(int, label))
-                else:
-                    filename, label = line_split
-                    label = int(label)
-                if self.data_prefix is not None:
-                    filename = osp.join(self.data_prefix, filename)
-                video_infos.append(dict(filename=filename, label=label, tar=self.use_tar_format))
-
-        return video_infos
-
-
-class SubsetRandomSampler(torch.utils.data.Sampler):
-    r"""Samples elements randomly from a given list of indices, without replacement.
-
-    Arguments:
-        indices (sequence): a sequence of indices
-    """
-
-    def __init__(self, indices):
-        self.epoch = 0
-        self.indices = indices
-
-    def __iter__(self):
-        return (self.indices[i] for i in torch.randperm(len(self.indices)))
-
-    def __len__(self):
-        return len(self.indices)
-
-    def set_epoch(self, epoch):
-        self.epoch = epoch
-
-
 def mmcv_collate(batch, samples_per_gpu=1): 
     if not isinstance(batch, Sequence):
         raise TypeError(f'{batch.dtype} is not supported.')
@@ -454,14 +389,6 @@ def build_dataloader(logger, config):
         pin_memory=True,
         drop_last=True,
         collate_fn=partial(mmcv_collate, samples_per_gpu=config.TRAIN.BATCH_SIZE),
-    )
-    train_loader_umil = DataLoader(
-        train_data, sampler=sampler_train,
-        batch_size=config.TRAIN.BATCH_SIZE_UMIL,
-        num_workers=4,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=partial(mmcv_collate, samples_per_gpu=config.TRAIN.BATCH_SIZE_UMIL),
     )
     
     val_pipeline = [
@@ -544,4 +471,4 @@ def build_dataloader(logger, config):
         collate_fn=partial(mmcv_collate, samples_per_gpu=2),
     )
 
-    return train_data, val_data, test_data, train_loader, val_loader, test_loader, train_loader_test, train_loader_umil
+    return train_data, val_data, test_data, train_loader, val_loader, test_loader, train_loader_test

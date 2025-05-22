@@ -10,7 +10,6 @@ import warnings
 sys.path.append("../")
 from clip.model import CLIP,LayerNorm,Transformer
 import clip
-from clip.model import QuickGELU
 
 class XCLIP(CLIP):
     def __init__(self,
@@ -81,7 +80,6 @@ class XCLIP(CLIP):
         self.prompts_visual_proj = nn.Parameter(torch.randn(vision_width, embed_dim))
         # for UDA
         self.head_video = nn.Linear(embed_dim, embed_dim)
-        self.u_head_video = nn.Linear(embed_dim, embed_dim)
 
         self.initialize_parameters()
         
@@ -135,20 +133,13 @@ class XCLIP(CLIP):
             self.train()
         return self.cache_text_features
 
-    def uda(self, video_feature, text_feature, train_flag):
+    def uda(self, video_feature, text_feature):
         v_fea = self.head_video(video_feature)
-        v_fea_u = self.u_head_video(video_feature)
 
         v_fea = v_fea / v_fea.norm(dim=-1, keepdim=True)
-        v_fea_u = v_fea_u / v_fea_u.norm(dim=-1, keepdim=True)
         t_fea = text_feature / text_feature.norm(dim=-1, keepdim=True)
 
-        if train_flag:
-            v_fea_u_nograd = self.u_head_video(video_feature.detach())
-            t_fea_nograd = t_fea.detach()
-            return video_feature, v_fea, v_fea_u, t_fea, v_fea_u_nograd, v_fea_u_nograd, t_fea_nograd
-        else:
-            return video_feature, v_fea, v_fea_u, t_fea
+        return video_feature, v_fea, t_fea
 
     def forward(self, image, text):
         b = image.shape[0]
@@ -168,36 +159,16 @@ class XCLIP(CLIP):
         text_features = text_features + self.prompts_generator(text_features, img_features)
 
         logit_scale = self.logit_scale.exp()
-        
-        if self.training:
-            _, v_features, v_features_u, t_features, \
-                _, v_features_u_n, t_features_n = self.uda(video_features, text_features, self.training)
+    
+        video_features, v_features, t_features = self.uda(video_features, text_features)
+        logits = torch.einsum("bd,bkd->bk", v_features, logit_scale * t_features)
 
-            logits = torch.einsum("bd,bkd->bk", v_features, logit_scale * t_features)
-            logits_u = torch.einsum("bd,bkd->bk", v_features_u, logit_scale * t_features)
-            logits_u_n = torch.einsum("bd,bkd->bk", v_features_u_n, logit_scale * t_features)
-
-            outputs=  {
-                    "y": logits,
-                    "y_cluster_all": logits_u,
-                    "feature_v": video_features,
-                    "feature_t": text_features,
-                    "y_cluster_all_nograd": logits_u_n
-                }
-            return outputs
-        else:
-            video_features, v_features, v_features_u, t_features= self.uda(video_features, text_features, self.training)
-            logits = torch.einsum("bd,bkd->bk", v_features, logit_scale * t_features)
-            logits_u = torch.einsum("bd,bkd->bk", v_features_u, logit_scale * t_features)
-
-            outputs = {
-                "y": logits,
-                "y_cluster_all": logits_u,
-                "feature_v": video_features,
-                "feature_t": text_features,
-            }
-            return outputs
-
+        outputs = {
+            "y": logits,
+            "feature_v": video_features,
+            "feature_t": text_features,
+        }
+        return outputs
 
 
 def build_model(state_dict: dict, T=8, droppath=0., use_checkpoint=False, logger=None, prompts_alpha=1e-1, prompts_layers=2, use_cache=True, mit_layers=4,):

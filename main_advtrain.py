@@ -1,6 +1,5 @@
 import os
 import torch
-import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import argparse
@@ -16,20 +15,16 @@ import time
 import numpy as np
 import random
 import mmcv
-# from apex import amp
 from utils.config import get_config
 from models import xclip
 from einops import rearrange
 import torch.nn.functional as F
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-import pandas as pd
-import json
 from prettytable import PrettyTable
 
 def parse_option():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-cfg', required=True, type=str, default='configs/k400/32_8.yaml')
+    parser.add_argument('--config', '-cfg', required=True, type=str)
     parser.add_argument(
         "--opts",
         help="Modify config options by adding 'KEY VALUE' pairs. ",
@@ -54,7 +49,7 @@ def parse_option():
     return args, config
 
 def main(config):
-    train_data, val_data, test_data, train_loader, val_loader, test_loader, val_loader_train, train_loader_umil = build_dataloader(logger, config)
+    train_data, _, _, train_loader, _, test_loader, _ = build_dataloader(logger, config)
     model, _, model_path = xclip.load(config.MODEL.PRETRAINED, config.MODEL.ARCH, 
                             device="cpu", jit=False, 
                             T=config.DATA.NUM_FRAMES,
@@ -66,26 +61,23 @@ def main(config):
     model = model.cuda()
     logger.info(f"Model loaded from {model_path}")
     
-    optimizer, _ = build_optimizer(config, model)
+    optimizer = build_optimizer(config, model)
     lr_scheduler = build_scheduler(config, optimizer, len(train_loader))
     
     text_labels = generate_text(train_data)
     
     if config.TEST.ONLY_TEST:
         model.eval()
-        scores_dict = gen_labels(train_loader, text_labels, model, config)
+        _ = gen_labels(train_loader, text_labels, model, config)
         return
     
     gt = None
-    vid2key = None
-    
     if config.ADV_TRAIN.PSEUDO_LABEL:
         with open(os.path.join(config.OUTPUT, 'advtrain_labels.json')) as json_data:
             gt = mmcv.load(json_data, file_format='json')
             json_data.close()
-        vid2key = {vid: key for vid, key in enumerate(gt['prd'].keys())}
     
-    start_epoch, best_epoch, max_auc = 0, 0, 0.0
+    start_epoch, max_auc = 0, 0.0
     
     if config.TRAIN.AUTO_RESUME:
         resume_file = auto_resume_helper(config.OUTPUT)
@@ -108,7 +100,24 @@ def main(config):
         train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, gt, eps)
         
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-            epoch_saving(config, epoch, model, max_auc, optimizer, _, lr_scheduler, _, logger, config.OUTPUT, False)
+            out_path = os.path.join(config.OUTPUT, f"ADV_epoch_{epoch}.pkl")
+            scores_dict = validate(test_loader, text_labels, model, config, out_path)
+            
+            tmp_dict = {}
+            for v_name in scores_dict["prd"].keys():
+                p_scores = np.array(scores_dict["prd"][v_name]).copy()
+                if p_scores.shape[0] == 1:
+                    # 1,32,2
+                    tmp_dict[v_name] = [p_scores[0, :, 1]]
+                else:
+                    # T,1,2
+                    tmp_dict[v_name] = [p_scores[:, 0, 1]]
+            auc_all, auc_ano = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
+            is_best = auc_all > max_auc
+            max_auc = max(max_auc, auc_all)
+            logger.info(f"Auc of ADV on epoch {epoch}: {auc_all:.4f}({auc_ano:.4f})")
+            logger.info(f'Max AUC@all epoch {epoch} : {max_auc:.4f}')
+            epoch_saving(config, epoch, model, max_auc, optimizer, lr_scheduler, logger, config.OUTPUT, is_best)
 
 def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_labels, config, gt, eps):
     model.train()
@@ -151,18 +160,14 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
         else:
             adv_labels = label_id
             
-        adv_images = get_adv_images(original_images, bz, a_aug, n_clips, model, texts, adv_labels, eps)
-        # save_image(original_images[0][0], "original")
-        # save_image(adv_images[0][0], "adv")
+        adv_images = get_adv_images(original_images, bz, a_aug, model, texts, adv_labels, eps)
         
         output = model(adv_images, texts)
         logits = rearrange(output['y'], '(b a k) c -> (b a) k c', b=bz, a=a_aug,)
 
         scores = F.softmax(logits, dim=-1)
         scores_ano = scores[:,:,1]
-        scores_nor = scores[:,:,0]
-        max_prob_ano, max_ind = torch.max(scores_ano, dim=-1)
-        max_prob_nor, _ = torch.max(scores_nor, dim=-1)
+        _, max_ind = torch.max(scores_ano, dim=-1)
 
         logits_video = torch.gather(logits, 1, max_ind[:, None, None].repeat((1, 1, 2))).squeeze(1)
         max_prob_video, _ = torch.max(torch.gather(scores, 1, max_ind[:, None, None].repeat((1, 1, 2))).squeeze(1),
@@ -236,7 +241,7 @@ def train_one_epoch(epoch, model, optimizer, lr_scheduler, train_loader, text_la
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
         
-def get_adv_images(original_images, bz, a_aug, n_clips, model, texts, labels, eps, num_attack_steps=10):
+def get_adv_images(original_images, bz, a_aug, model, texts, labels, eps, num_attack_steps=10):
     step_size = 2.5 * (eps / num_attack_steps)
     
     adv_images = original_images.clone().detach() # 16,5,3,224,224
@@ -249,7 +254,6 @@ def get_adv_images(original_images, bz, a_aug, n_clips, model, texts, labels, ep
         scores = rearrange(scores, '(b a k) c -> (b a) k c', b=bz, a=a_aug)
         logits = scores[:, :, 1].reshape(-1)
         
-        # labels_binary = (label_id > 0).float().expand(logits.shape)
         labels_binary = torch.tensor(labels).cuda().float()
         
         coef = torch.where(labels_binary == 0.0, torch.ones_like(labels_binary), -torch.ones_like(labels_binary))
@@ -305,8 +309,63 @@ def gen_labels(data_loader, text_labels, model, config):
     with open(os.path.join(config.OUTPUT, "advtrain_labels.json"), 'w') as fp:
         mmcv.dump(scores_dict, fp, file_format='json')
 
+@torch.no_grad()
+def validate(data_loader, text_labels, model, config, out_path):
+    model.eval()
+    vid_list = []
+
+    anno_file = config.DATA.VAL_FILE
+
+    with open(anno_file, 'r') as fin:
+        for line in fin:
+            line_split = line.strip().split()
+            filename = line_split[0].split('/')[-1]
+            vid_list.append(filename)
+
+    with torch.no_grad():
+        text_inputs = text_labels.cuda()
+        logger.info(f"{config.TEST.NUM_CLIP * config.TEST.NUM_CROP} views inference")
+        scores_dict = dict()
+        scores_dict['prd'] = dict()
+        for idx, batch_data in enumerate(data_loader):
+            _image = batch_data["imgs"]
+            label_id = batch_data["label"]
+            label_id = label_id.reshape(-1)
+            b, n, c, t, h, w = _image.size()
+            _image = rearrange(_image, 'b n c t h w -> (b n) t c h w')
+            output = model(_image.cuda(), text_inputs)
+
+            scores_prd = F.softmax(output['y'], dim=-1)
+            scores_prd = rearrange(scores_prd, '(b n) c -> b n c', b=b)
+            scores_np_prd = scores_prd.cpu().data.numpy()
+
+            for ind in range(scores_np_prd.shape[0]):
+                v_name = vid_list[batch_data["vid"][ind]]
+                if v_name not in scores_dict['prd']:
+                    scores_dict['prd'][v_name] = []
+                scores_dict['prd'][v_name].append(scores_np_prd[ind])
+            if idx % 100 == 0 and len(data_loader) >= 100:
+                logger.info(
+                    f'Test: [{idx}/{len(data_loader)}]\t'
+                )
+                
+    tmp_dict = {}
+    for v_name in scores_dict["prd"].keys():
+        p_scores = np.array(scores_dict["prd"][v_name]).copy()
+        if p_scores.shape[0] == 1:
+            # 1,T,2
+            tmp_dict[v_name] = [p_scores[0, :, 1]]
+        else:
+            # T,1,2
+            tmp_dict[v_name] = [p_scores[:, 0, 1]]
+
+    auc_all_p, auc_ano_p = evaluate_result(tmp_dict, config.DATA.VAL_FILE)
+    logger.info(f'AUC: [{auc_all_p:.3f}/{auc_ano_p:.3f}]\t')
+    logger.info(f'writing results to {out_path}')
+    mmcv.dump(scores_dict, out_path)
+    return scores_dict
+
 def get_gt(config):
-    GT = []
     videos = {}
     for video in open(config.DATA.VAL_FILE):
         vid = video.strip().split(' ')[0].split('/')[-1]
@@ -322,21 +381,12 @@ def get_gt(config):
         
     return videos
 
-def get_vid_list(config):
-    vid_list = []
-    with open(config.DATA.VAL_FILE, 'r') as fin:
-        for line in fin:
-            line_split = line.strip().split()
-            filename = line_split[0].split('/')[-1]
-            vid_list.append(filename)
-    return vid_list
-
-def count_parameters(model):
+def count_parameters(model, all=True):
     table = PrettyTable(["Modules", "Parameters"])
     total_params = 0
     for name, parameter in model.named_parameters():
-        # if not parameter.requires_grad:
-        #     continue
+        if not all and not parameter.requires_grad:
+            continue
         params = parameter.numel()
         table.add_row([name, params])
         total_params += params
